@@ -18,12 +18,28 @@ class QuoteIn(APIModel):
     promo_code: str | None = Field(default=None, max_length=40)
 
 
+class QuoteLineOut(APIModel):
+    """Server-side price for one cart line.
+
+    The cart lives in the customer's browser, so the price it holds can be
+    hours old. The storefront renders these instead of its stored copy, which
+    is what stops a line reading $6.57 while the total is calculated at $20.76.
+    """
+
+    plan_id: int
+    title: str
+    unit_price: Money
+    quantity: int
+    line_total: Money
+
+
 class QuoteOut(APIModel):
     subtotal: Money
     discount: Money
     total: Money
     promo_applied: bool
     promo_message: str | None = None
+    lines: list[QuoteLineOut] = []
 
 
 class ESIMOut(APIModel):

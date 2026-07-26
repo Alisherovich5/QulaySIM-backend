@@ -7,7 +7,13 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from app.api.deps import CurrentCustomer, SessionDep
 from app.core.config import settings
-from app.core.cookies import REFRESH_COOKIE, clear_refresh_cookie, set_refresh_cookie
+from app.core.cookies import (
+    REFRESH_COOKIE,
+    clear_refresh_cookie,
+    clear_session_hint,
+    set_refresh_cookie,
+    set_session_hint,
+)
 from app.core.errors import AuthenticationError
 from app.core.ratelimit import RateLimit, client_ip, enforce
 from app.db.models import Customer
@@ -25,6 +31,7 @@ def _issue(response: Response, customer: Customer) -> TokenOut:
     """
     access, refresh, ttl = auth_service.issue_tokens(customer)
     set_refresh_cookie(response, refresh)
+    set_session_hint(response)
     return TokenOut(access_token=access, expires_in=ttl)
 
 
@@ -61,7 +68,13 @@ async def login(
     return _issue(response, customer)
 
 
-@router.post("/refresh", response_model=TokenOut)
+@router.post(
+    "/refresh",
+    response_model=TokenOut,
+    # Unauthenticated and cheap to call, so it needs the same brute-force
+    # ceiling as login — otherwise it is a free oracle for guessing tokens.
+    dependencies=[Depends(RateLimit("refresh", settings.rate_limit_login))],
+)
 async def refresh(
     session: SessionDep,
     response: Response,
@@ -79,6 +92,7 @@ async def refresh(
 
     _, access, new_refresh, ttl = await auth_service.rotate_refresh_token(session, token)
     set_refresh_cookie(response, new_refresh)
+    set_session_hint(response)
     return TokenOut(access_token=access, expires_in=ttl)
 
 
@@ -90,6 +104,7 @@ async def logout(
 ) -> None:
     await auth_service.logout(qs_refresh or (payload.refresh_token if payload else None))
     clear_refresh_cookie(response)
+    clear_session_hint(response)
 
 
 @router.get("/me", response_model=CustomerOut)

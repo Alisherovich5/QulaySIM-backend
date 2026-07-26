@@ -44,3 +44,30 @@ def clear_refresh_cookie(response: Response) -> None:
         secure=settings.is_production,
         samesite="none" if settings.is_production else "lax",
     )
+
+
+# A deliberately readable companion cookie. It holds no credential — only the
+# fact that a refresh cookie exists — so the storefront can skip the refresh
+# call for anonymous visitors instead of starting every page load with a 401.
+SESSION_HINT_COOKIE = "qs_session"
+
+
+def set_session_hint(response: Response) -> None:
+    response.set_cookie(
+        key=SESSION_HINT_COOKIE,
+        value="1",
+        max_age=settings.refresh_token_ttl_days * 86400,
+        path="/",
+        httponly=False,
+        secure=settings.is_production,
+        samesite="none" if settings.is_production else "lax",
+    )
+
+
+def clear_session_hint(response: Response) -> None:
+    response.delete_cookie(
+        key=SESSION_HINT_COOKIE,
+        path="/",
+        secure=settings.is_production,
+        samesite="none" if settings.is_production else "lax",
+    )

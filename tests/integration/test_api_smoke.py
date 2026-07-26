@@ -267,3 +267,80 @@ class TestMarginIsNotPublic:
         )
         for field in self.LEAKY_FIELDS:
             assert field not in response.text, f"{field} leaked in the quote payload"
+
+
+class TestQuoteReturnsServerPrices:
+    """The cart lives in the browser and its prices go stale.
+
+    Regression guard: the quote used to return totals only, so a checkout line
+    could read one price while the total was calculated from another.
+    """
+
+    async def test_quote_includes_per_line_prices(self, client: AsyncClient) -> None:
+        countries = (await client.get("/api/countries?limit=1")).json()
+        if not countries:
+            pytest.skip("catalogue is empty; run scripts.seed")
+        detail = (await client.get(f"/api/countries/{countries[0]['slug']}")).json()
+        if not detail["plans"]:
+            pytest.skip("no plans on the first country")
+
+        plan = detail["plans"][0]
+        body = (
+            await client.post(
+                "/api/checkout/quote",
+                json={"items": [{"plan_id": plan["id"], "quantity": 3}]},
+            )
+        ).json()
+
+        assert len(body["lines"]) == 1
+        line = body["lines"][0]
+        assert line["plan_id"] == plan["id"]
+        assert line["quantity"] == 3
+        assert line["unit_price"] == plan["price_usd"]
+        assert line["line_total"] == round(plan["price_usd"] * 3, 2)
+        assert line["line_total"] == body["subtotal"]
+
+
+class TestSessionHintCookie:
+    """Anonymous visitors should not start every page load with a failing
+    refresh, so a readable (credential-free) marker says whether to bother."""
+
+    async def test_register_sets_a_readable_hint(self, client: AsyncClient) -> None:
+        email = f"hint-{uuid.uuid4().hex[:12]}@example.com"
+        response = await client.post(
+            "/api/auth/register",
+            json={"email": email, "full_name": "H", "password": "sufficiently-long-pw"},
+        )
+        assert response.status_code == 201
+
+        cookies = response.headers.get_list("set-cookie")
+        hint = next((c for c in cookies if c.startswith("qs_session=")), None)
+        refresh = next((c for c in cookies if c.startswith("qs_refresh=")), None)
+
+        assert hint is not None, "no session hint cookie"
+        assert "httponly" not in hint.lower(), "the hint must be readable by the client"
+        assert refresh is not None and "httponly" in refresh.lower()
+
+    async def test_logout_clears_the_hint(self, client: AsyncClient) -> None:
+        email = f"hintout-{uuid.uuid4().hex[:12]}@example.com"
+        await client.post(
+            "/api/auth/register",
+            json={"email": email, "full_name": "H", "password": "sufficiently-long-pw"},
+        )
+        response = await client.post("/api/auth/logout", json={})
+        cleared = [
+            c for c in response.headers.get_list("set-cookie") if c.startswith("qs_session=")
+        ]
+        assert cleared, "logout must expire the hint cookie"
+
+
+class TestRefreshIsRateLimited:
+    async def test_repeated_bad_tokens_are_throttled(self, client: AsyncClient) -> None:
+        """Unauthenticated and cheap to call — without a ceiling it is a free
+        oracle for guessing refresh tokens."""
+        codes = []
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as bare:
+            for _ in range(14):
+                r = await bare.post("/api/auth/refresh", json={"refresh_token": "nope"})
+                codes.append(r.status_code)
+        assert 429 in codes, f"never throttled: {codes}"

@@ -20,6 +20,7 @@ from app.core.security import (
     decode_token,
     hash_password,
     is_revoked,
+    needs_rehash,
     revoke,
     verify_password,
 )
@@ -101,6 +102,14 @@ async def authenticate(session: AsyncSession, *, email: str, password: str) -> C
         raise AuthenticationError("Incorrect email or password")
     if not customer.is_active:
         raise AuthenticationError("Account disabled")
+
+    # Opportunistic upgrade: the plaintext is only available here, so a hash
+    # made at a weaker cost factor can be replaced at no cost to the customer.
+    if needs_rehash(customer.hashed_password):
+        customer.hashed_password = hash_password(password)
+        await session.commit()
+        logger.info("auth.password_rehashed", customer_id=customer.id)
+
     logger.info("auth.login_ok", customer_id=customer.id)
     return customer
 
