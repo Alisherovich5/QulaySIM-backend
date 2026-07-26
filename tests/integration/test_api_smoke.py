@@ -227,3 +227,43 @@ class TestResponseHardening:
             json={"email": email, "full_name": "N", "password": "sufficiently-long-pw"},
         )
         assert response.headers.get("cache-control") == "no-store"
+
+
+class TestMarginIsNotPublic:
+    """Supplier cost and markup are commercially sensitive.
+
+    They are mapped on the ORM model so workers and reports can use them, which
+    makes it easy to leak them by adding a field to a response schema. These
+    tests fail the moment that happens.
+    """
+
+    LEAKY_FIELDS = ("cost_usd", "markup_percent", "price_locked", "margin")
+
+    async def test_country_detail_exposes_no_cost(self, client: AsyncClient) -> None:
+        countries = (await client.get("/api/countries?limit=1")).json()
+        if not countries:
+            pytest.skip("catalogue is empty; run scripts.seed")
+
+        body = (await client.get(f"/api/countries/{countries[0]['slug']}")).text
+        for field in self.LEAKY_FIELDS:
+            assert field not in body, f"{field} leaked in the country detail payload"
+
+    async def test_country_list_exposes_no_cost(self, client: AsyncClient) -> None:
+        body = (await client.get("/api/countries")).text
+        for field in self.LEAKY_FIELDS:
+            assert field not in body, f"{field} leaked in the country list payload"
+
+    async def test_quote_exposes_no_cost(self, client: AsyncClient) -> None:
+        countries = (await client.get("/api/countries?limit=1")).json()
+        if not countries:
+            pytest.skip("catalogue is empty; run scripts.seed")
+        detail = (await client.get(f"/api/countries/{countries[0]['slug']}")).json()
+        if not detail["plans"]:
+            pytest.skip("no plans on the first country")
+
+        response = await client.post(
+            "/api/checkout/quote",
+            json={"items": [{"plan_id": detail["plans"][0]["id"], "quantity": 1}]},
+        )
+        for field in self.LEAKY_FIELDS:
+            assert field not in response.text, f"{field} leaked in the quote payload"

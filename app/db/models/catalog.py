@@ -46,6 +46,12 @@ class Plan(Base):
     data_amount_mb: Mapped[int] = mapped_column(Integer, default=1024)
     is_unlimited: Mapped[bool] = mapped_column(Boolean, default=False)
     validity_days: Mapped[int] = mapped_column(Integer, default=7)
+    # Supplier cost and markup are internal: they are mapped so workers and
+    # reports can read them, but they must never reach a customer-facing
+    # schema. `tests/integration/test_api_smoke.py` enforces that.
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    markup_percent: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    price_locked: Mapped[bool] = mapped_column(Boolean, default=False)
     # Decimal, not float: money must never round-trip through binary floating point.
     price_usd: Mapped[Decimal] = mapped_column(Numeric(8, 2))
     network_type: Mapped[str] = mapped_column(String(2), default="4G")
