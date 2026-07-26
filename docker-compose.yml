@@ -1,0 +1,93 @@
+name: qulaysim
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:-fastsim}
+      POSTGRES_USER: ${DB_USER:-fastsim}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-fastsim}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fastsim} -d ${DB_NAME:-fastsim}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-fastsim}:${DB_PASSWORD:-fastsim}@postgres:5432/${DB_NAME:-fastsim}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=INFO --concurrency=4
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-fastsim}:${DB_PASSWORD:-fastsim}@postgres:5432/${DB_NAME:-fastsim}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  beat:
+    build: .
+    command: celery -A app.workers.celery_app.celery_app beat --loglevel=INFO
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${DB_USER:-fastsim}:${DB_PASSWORD:-fastsim}@postgres:5432/${DB_NAME:-fastsim}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  # Django owns the schema: it runs the migrations this API maps onto.
+  admin:
+    build:
+      context: ../QulaySIM-admin
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8001"
+    environment:
+      DB_NAME: ${DB_NAME:-fastsim}
+      DB_USER: ${DB_USER:-fastsim}
+      DB_PASSWORD: ${DB_PASSWORD:-fastsim}
+      DB_HOST: postgres
+      DEBUG: "true"
+      SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-not-for-production}
+    depends_on:
+      postgres: {condition: service_healthy}
+    ports:
+      - "8001:8001"
+    profiles: ["full"]
+
+volumes:
+  pgdata:
+  redisdata:

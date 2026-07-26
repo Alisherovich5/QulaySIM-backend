@@ -1,36 +1,100 @@
+"""Application configuration.
+
+Every security-critical value is REQUIRED — there are deliberately no
+fall-back defaults for secrets. A missing value must crash the process at
+import time rather than silently boot an insecure service.
+"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Annotated, Literal
+
+from pydantic import Field, PostgresDsn, RedisDsn, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False
+    )
 
-    database_url: str = "postgresql+psycopg://fastsim:fastsim@localhost:5432/fastsim"
-    jwt_secret: str = "dev-secret"
+    # --- Runtime -----------------------------------------------------------
+    environment: Literal["local", "staging", "production"] = "local"
+    debug: bool = False
+    log_level: str = "INFO"
+    service_name: str = "qulaysim-api"
+
+    # --- Datastores (required) --------------------------------------------
+    database_url: PostgresDsn
+    redis_url: RedisDsn
+
+    db_pool_size: int = 10
+    db_max_overflow: int = 20
+    db_pool_recycle_seconds: int = 1800
+    db_echo: bool = False
+
+    # --- Auth (required) ---------------------------------------------------
+    jwt_secret: Annotated[str, Field(min_length=32)]
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 10080
-    cors_origins: str = "http://localhost:5173"
-    payment_provider: str = "disabled"
-    # Keep mock as the default until eSIM Access credentials and plan mappings
-    # have been verified with a refundable live test order.
-    esim_provider: str = "mock"
+    access_token_ttl_minutes: int = 30
+    refresh_token_ttl_days: int = 30
+
+    # --- CORS --------------------------------------------------------------
+    cors_origins: str = ""
+
+    # --- Rate limits (requests / window seconds) ---------------------------
+    rate_limit_login: str = "10/300"
+    rate_limit_register: str = "5/3600"
+    rate_limit_support: str = "3/300"
+    rate_limit_default: str = "120/60"
+
+    # --- Cache TTLs --------------------------------------------------------
+    cache_ttl_catalog: int = 300
+    cache_ttl_landing: int = 300
+    cache_ttl_currency: int = 21600
+
+    # --- Providers ---------------------------------------------------------
+    payment_provider: Literal["disabled", "mock"] = "disabled"
+    esim_provider: Literal["mock", "esimaccess"] = "mock"
     esimaccess_base_url: str = "https://api.esimaccess.com"
     esimaccess_access_code: str = ""
     esimaccess_secret_key: str = ""
     esimaccess_webhook_token: str = ""
     esimaccess_timeout_seconds: int = 20
+
     cbu_currency_url: str = "https://cbu.uz/uz/arkhiv-kursov-valyut/json/"
-    currency_rate_cache_seconds: int = 21600
-    # Used only when the Central Bank endpoint is temporarily unavailable.
-    uzs_per_usd_fallback: float = 12000
-    # Kept server-side only. Never expose Telegram credentials to the storefront.
+    uzs_per_usd_fallback: float = 12000.0
+
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_timeout_seconds: int = 10
-    support_message_cooldown_seconds: int = 30
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _reject_placeholder_secret(cls, v: str) -> str:
+        weak = {"dev-secret", "changeme", "secret", "replace-with-a-long-random-value"}
+        if v.strip().lower() in weak:
+            raise ValueError("JWT_SECRET is a placeholder value — generate a real secret")
+        return v
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
 
-settings = Settings()
+    @property
+    def sync_database_url(self) -> str:
+        """psycopg URL for Celery workers that use the sync engine."""
+        return str(self.database_url).replace("+asyncpg", "+psycopg")
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

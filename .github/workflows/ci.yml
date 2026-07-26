@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push: {branches: [main, senior-architecture]}
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check app tests
+      - name: Format check
+        run: ruff format --check app tests
+      - name: Types
+        run: mypy app
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: fastsim
+          POSTGRES_USER: fastsim
+          POSTGRES_PASSWORD: fastsim
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s
+          --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://fastsim:fastsim@localhost:5432/fastsim
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET: ci-only-secret-value-at-least-32-characters-long
+      ENVIRONMENT: local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -e ".[dev]"
+
+      # Django owns the schema — apply its migrations, then assert the
+      # SQLAlchemy models still match. This is the contract between the repos.
+      - name: Check out admin (schema owner)
+        uses: actions/checkout@v4
+        with: {repository: Alisherovich5/QulaySIM-admin, path: admin}
+      - name: Apply Django migrations
+        working-directory: admin
+        env:
+          DB_NAME: fastsim
+          DB_USER: fastsim
+          DB_PASSWORD: fastsim
+          DB_HOST: localhost
+          SECRET_KEY: ci-only
+        run: |
+          pip install -r requirements.txt
+          python manage.py migrate --noinput
+
+      - name: Tests
+        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=70
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with: {context: ., push: false, cache-from: "type=gha", cache-to: "type=gha,mode=max"}
