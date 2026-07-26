@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = 30
     refresh_token_ttl_days: int = 30
 
+    # Shared with the Django admin — both services read the same encrypted
+    # columns, so the key must be identical on both sides.
+    field_encryption_key: str = ""
+
     # --- CORS --------------------------------------------------------------
     cors_origins: str = ""
 

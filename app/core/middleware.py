@@ -50,6 +50,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
 
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         response.headers["X-Request-ID"] = rid
+        # Announcing the server and its version only helps someone matching
+        # the deployment against a CVE list.
+        response.headers["Server"] = "QulaySIM"
         response.headers["Server-Timing"] = f"app;dur={duration_ms}"
         if request.url.path != "/api/health":
             logger.info(

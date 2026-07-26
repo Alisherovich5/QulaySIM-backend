@@ -83,6 +83,27 @@ def _body(code: str, detail: str, **extra: Any) -> dict[str, Any]:
     return {"code": code, "detail": detail, "request_id": request_id_var.get(), **extra}
 
 
+def _serialisable_errors(exc: RequestValidationError) -> list[dict[str, Any]]:
+    """Strip anything the JSON encoder cannot handle.
+
+    A validator that raises ValueError puts the exception *object* into the
+    error's `ctx`. Serialising that fails, which turned every rejected
+    password into a 500 instead of the 422 the client needs to show a message.
+    """
+    cleaned: list[dict[str, Any]] = []
+    for error in exc.errors():
+        entry = {
+            "type": error.get("type"),
+            "loc": [str(part) for part in error.get("loc", ())],
+            "msg": str(error.get("msg", "")),
+        }
+        ctx = error.get("ctx")
+        if ctx:
+            entry["ctx"] = {key: str(value) for key, value in ctx.items()}
+        cleaned.append(entry)
+    return cleaned
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DomainError)
     async def _domain(_r: Request, exc: DomainError) -> ORJSONResponse:
@@ -100,7 +121,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation(_r: Request, exc: RequestValidationError) -> ORJSONResponse:
         return ORJSONResponse(
-            _body("validation_error", "Request payload is invalid", errors=exc.errors()),
+            _body(
+                "validation_error",
+                "Request payload is invalid",
+                errors=_serialisable_errors(exc),
+            ),
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 

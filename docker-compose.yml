@@ -14,6 +14,9 @@ x-django-env: &django-env
   DB_PORT: "5432"
   REDIS_URL: redis://redis:6379/0
   SECRET_KEY: ${DJANGO_SECRET_KEY:?set DJANGO_SECRET_KEY in .env}
+  # Same key as the API: both read the encrypted eSIM columns.
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?set FIELD_ENCRYPTION_KEY in .env}
+  ADMIN_URL_PATH: ${ADMIN_URL_PATH:-admin}
   DEBUG: ${DJANGO_DEBUG:-False}
   ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
 

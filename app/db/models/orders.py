@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, utcnow
 from app.db.models.catalog import Plan
 from app.db.models.customers import Customer
+from app.db.types import EncryptedString, EncryptedText
 
 
 class PromoCode(Base):
@@ -67,9 +68,11 @@ class ESIM(Base):
     order_id: Mapped[int] = mapped_column(ForeignKey("orders_order.id"))
     plan_id: Mapped[int] = mapped_column(ForeignKey("catalog_plan.id"))
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers_customer.id"))
+    # ICCID stays in the clear so support can look a profile up; on its own it
+    # installs nothing. The activation code is the credential, so it does not.
     iccid: Mapped[str] = mapped_column(String(22), unique=True)
-    qr_payload: Mapped[str] = mapped_column(String(255))
-    qr_image: Mapped[str] = mapped_column(Text, default="")
+    qr_payload: Mapped[str] = mapped_column(EncryptedString)
+    qr_image: Mapped[str] = mapped_column(EncryptedText, default="")
     provider: Mapped[str] = mapped_column(String(20), default="mock")
     provider_esim_tran_no: Mapped[str] = mapped_column(String(64), default="")
     provider_status: Mapped[str] = mapped_column(String(40), default="")

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import EmailStr, Field, field_validator
+from pydantic import EmailStr, Field, field_validator, model_validator
 
+from app.domain.passwords import MIN_LENGTH as MIN_PASSWORD_LENGTH
 from app.schemas.base import APIModel
-
-MIN_PASSWORD_LENGTH = 8
 
 
 class RegisterIn(APIModel):
@@ -19,6 +18,15 @@ class RegisterIn(APIModel):
     @classmethod
     def _strip(cls, v: str) -> str:
         return v.strip()
+
+    @model_validator(mode="after")
+    def _password_is_strong(self) -> RegisterIn:
+        from app.domain.passwords import rejection_reason
+
+        reason = rejection_reason(self.password, email=str(self.email), full_name=self.full_name)
+        if reason:
+            raise ValueError(reason)
+        return self
 
 
 class TokenOut(APIModel):
