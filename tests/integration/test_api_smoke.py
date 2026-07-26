@@ -74,7 +74,10 @@ class TestRegistrationAndLogin:
         )
         assert created.status_code == 201
         tokens = created.json()
-        assert tokens["access_token"] and tokens["refresh_token"]
+        assert tokens["access_token"]
+        # The refresh token must never appear in a body a script can read.
+        assert "refresh_token" not in tokens
+        assert "qs_refresh" in created.cookies
 
         me = await client.get(
             "/api/auth/me", headers={"Authorization": f"Bearer {tokens['access_token']}"}
@@ -82,14 +85,15 @@ class TestRegistrationAndLogin:
         assert me.status_code == 200
         assert me.json()["email"] == email
 
-        # Refresh rotates: the old token must not work twice.
-        rotated = await client.post(
-            "/api/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-        )
+        # The client (httpx) now holds the cookie; refresh needs no body.
+        stale = created.cookies["qs_refresh"]
+        rotated = await client.post("/api/auth/refresh", json={})
         assert rotated.status_code == 200
-        replay = await client.post(
-            "/api/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
-        )
+
+        # Refresh tokens are single-use. The replay needs a cookie-less client:
+        # the router prefers the cookie, which this one has already rotated.
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as bare:
+            replay = await bare.post("/api/auth/refresh", json={"refresh_token": stale})
         assert replay.status_code == 401, "a spent refresh token must be rejected"
 
     async def test_duplicate_email_does_not_confirm_existence(self, client: AsyncClient) -> None:
@@ -173,3 +177,53 @@ class TestSupportContract:
             },
         )
         assert response.status_code == 422
+
+
+class TestRefreshCookie:
+    """The long-lived credential must be unreachable from JavaScript."""
+
+    async def test_cookie_is_httponly_and_scoped(self, client: AsyncClient) -> None:
+        email = f"cookie-{uuid.uuid4().hex[:12]}@example.com"
+        response = await client.post(
+            "/api/auth/register",
+            json={"email": email, "full_name": "C", "password": "sufficiently-long-pw"},
+        )
+        assert response.status_code == 201
+
+        raw = response.headers["set-cookie"].lower()
+        assert "httponly" in raw, "an XSS could otherwise read 30 days of access"
+        assert "path=/api/auth" in raw, "the cookie should not ride on every request"
+        assert "max-age=" in raw
+
+    async def test_refresh_without_a_cookie_or_body_is_rejected(self, client: AsyncClient) -> None:
+        fresh = AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+        async with fresh:
+            assert (await fresh.post("/api/auth/refresh", json={})).status_code == 401
+
+    async def test_logout_clears_the_cookie_and_revokes_the_token(
+        self, client: AsyncClient
+    ) -> None:
+        email = f"logout-{uuid.uuid4().hex[:12]}@example.com"
+        await client.post(
+            "/api/auth/register",
+            json={"email": email, "full_name": "L", "password": "sufficiently-long-pw"},
+        )
+        assert (await client.post("/api/auth/logout", json={})).status_code == 204
+        # The revoked token is refused even though httpx still replays a cookie.
+        assert (await client.post("/api/auth/refresh", json={})).status_code == 401
+
+
+class TestResponseHardening:
+    async def test_csp_denies_everything(self, client: AsyncClient) -> None:
+        """This API returns only JSON, so a stray HTML page must not run script."""
+        csp = (await client.get("/api/health")).headers["content-security-policy"]
+        assert "default-src 'none'" in csp
+        assert "frame-ancestors 'none'" in csp
+
+    async def test_session_responses_are_not_cacheable(self, client: AsyncClient) -> None:
+        email = f"nocache-{uuid.uuid4().hex[:12]}@example.com"
+        response = await client.post(
+            "/api/auth/register",
+            json={"email": email, "full_name": "N", "password": "sufficiently-long-pw"},
+        )
+        assert response.headers.get("cache-control") == "no-store"

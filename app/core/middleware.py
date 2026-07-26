@@ -22,6 +22,11 @@ _SECURITY_HEADERS = {
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
     "Cross-Origin-Opener-Policy": "same-origin",
+    # This API only ever returns JSON, so nothing needs to execute or load.
+    # A stray HTML error page therefore cannot run script.
+    "Content-Security-Policy": (
+        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+    ),
 }
 
 
@@ -62,6 +67,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         for header, value in _SECURITY_HEADERS.items():
             response.headers.setdefault(header, value)
+        # A response that mints a session must never be cached by a proxy.
+        if "set-cookie" in response.headers:
+            response.headers["Cache-Control"] = "no-store"
         if settings.is_production:
             response.headers.setdefault(
                 "Strict-Transport-Security", "max-age=31536000; includeSubDomains"

@@ -54,9 +54,9 @@ ikkalasi ham faol profillarni ortiqcha ko'rsatardi.
 |---|---|
 | `jwt_secret = "dev-secret"` default | Majburiy, min 32 belgi, placeholder'lar rad etiladi |
 | `python-jose` (qo'llab-quvvatlanmaydi, CVE) | PyJWT |
-| 7 kunlik yagona token, bekor qilib bo'lmaydi | 30 daq access + rotatsiyalanuvchi refresh + Redis denylist |
+| 7 kunlik yagona token, bekor qilib bo'lmaydi | 30 daq access (faqat xotirada) + httpOnly cookie'dagi refresh + Redis denylist |
 | Login/register'da rate limit yo'q | Redis sliding window, IP **va** hisob bo'yicha |
-| Xavfsizlik sarlavhalari yo'q | nosniff, DENY, Referrer-Policy, Permissions-Policy, HSTS |
+| Xavfsizlik sarlavhalari yo'q | CSP, nosniff, DENY, Referrer-Policy, Permissions-Policy, HSTS |
 | `/docs` production'da ochiq | Production'da o'chirilgan |
 | CORS localhost regex production'da | Faqat non-production'da |
 | Xato javoblarida ichki ma'lumot | Yagona konvert, 500'da hech narsa oshkor bo'lmaydi |
@@ -102,7 +102,7 @@ migratsiyalarini `QulaySIM-admin` dan qo'llab, keyin shu testni ishga tushiradi.
 - **Celery**: 6 vazifa, beat jadvali, eksponensial backoff, `acks_late`.
 - **CI**: ruff + format + mypy strict + testlar (Django migratsiyalari bilan)
   + Docker build.
-- **Testlar**: 0 dan 96 ga, 74% qamrov.
+- **Testlar**: 0 dan 103 ga, 75% qamrov.
 
 ## Tekshirilgan holat
 
@@ -110,7 +110,7 @@ migratsiyalarini `QulaySIM-admin` dan qo'llab, keyin shu testni ishga tushiradi.
 ruff check      All checks passed
 ruff format     78 files already formatted
 mypy --strict   Success: no issues found in 68 source files
-pytest          96 passed, 74% coverage
+pytest          103 passed, 75% coverage
 docker build    Successfully tagged qulaysim-api:test (461 MB)
 konteyner       healthy, user=app, /docs → 404, HSTS mavjud
 frontend kontrakti  8/8 tip to'liq mos

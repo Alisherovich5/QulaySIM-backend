@@ -22,14 +22,22 @@ class RegisterIn(APIModel):
 
 
 class TokenOut(APIModel):
+    """Only the access token is returned.
+
+    The refresh token is delivered as an httpOnly cookie so that no script —
+    including an injected one — can read the long-lived credential.
+    """
+
     access_token: str
-    refresh_token: str | None = None
     token_type: str = "bearer"
     expires_in: int
 
 
 class RefreshIn(APIModel):
-    refresh_token: str
+    """Fallback for clients that cannot hold cookies; browsers use the
+    httpOnly `qs_refresh` cookie instead."""
+
+    refresh_token: str | None = None
 
 
 class CustomerOut(APIModel):
