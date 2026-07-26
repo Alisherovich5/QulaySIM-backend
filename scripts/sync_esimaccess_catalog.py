@@ -23,9 +23,9 @@ from sqlalchemy.orm import joinedload
 # Allow `python scripts/...` without requiring callers to set PYTHONPATH.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.database import SessionLocal
-from app.models import Country, Plan
-from app.services.providers.esim_access import EsimAccessClient
+from app.db.models import Country, Plan
+from app.integrations.esim_access import EsimAccessClient
+from app.workers.session import SyncSessionFactory as SessionLocal
 
 TARGETS = ((1, 7), (3, 15), (5, 30), (10, 30), (20, 30))
 BYTES_PER_GB = 1024 * 1024 * 1024
@@ -61,11 +61,26 @@ def _choose_packages(packages: list[dict]) -> list[dict]:
     return selected
 
 
-def _retail_usd(package: dict) -> Decimal:
-    # eSIM Access prices are integer USD × 10,000. Prefer their suggested retail
-    # value; it is safer than unintentionally selling at supplier cost.
-    value = int(package.get("retailPrice") or package.get("price") or 0)
-    return (Decimal(value) / Decimal(10_000)).quantize(Decimal("0.01"))
+def _usd(value: object) -> Decimal:
+    """eSIM Access sends integer USD × 10,000."""
+    return (Decimal(str(value or 0)) / Decimal(10_000)).quantize(Decimal("0.01"))
+
+
+def _cost_usd(package: dict) -> Decimal:
+    """What the supplier charges us.
+
+    This used to write `retailPrice` straight into the selling price, because
+    there was no markup engine and selling at supplier cost would have meant
+    zero margin. Now the cost is recorded as cost and the markup rules in the
+    admin decide the selling price — so `price` is the correct field to read.
+    """
+    return _usd(package.get("price") or package.get("retailPrice"))
+
+
+def _suggested_retail_usd(package: dict) -> Decimal:
+    """The supplier's own suggested retail, used only to seed brand-new plans
+    until the pricing rules are applied."""
+    return _usd(package.get("retailPrice") or package.get("price"))
 
 
 def main() -> int:
@@ -92,7 +107,7 @@ def main() -> int:
             for package in choices:
                 slug = str(package["slug"])
                 selected_slugs.add(slug)
-                volume_mb = int(round(int(package.get("volume") or 0) / (1024 * 1024)))
+                volume_mb = round(int(package.get("volume") or 0) / (1024 * 1024))
                 duration = int(package.get("duration") or 0)
                 plan = existing.get(slug)
                 fields = {
@@ -103,7 +118,7 @@ def main() -> int:
                     "data_amount_mb": volume_mb,
                     "is_unlimited": False,
                     "validity_days": duration,
-                    "price_usd": _retail_usd(package),
+                    "cost_usd": _cost_usd(package),
                     "network_type": "5G" if "5G" in str(package.get("speed") or "") else "4G",
                     "supports_hotspot": True,
                     "is_popular": len(selected_slugs) == 3,
@@ -112,9 +127,19 @@ def main() -> int:
                     "provider_package_code": slug,
                 }
                 if plan is None:
-                    plan = Plan(**fields, sort_order=len(selected_slugs))
+                    # Seed the selling price from the supplier's suggested
+                    # retail so a new plan is never briefly free; the markup
+                    # rules replace it on the next recalculation.
+                    plan = Plan(
+                        **fields,
+                        price_usd=_suggested_retail_usd(package),
+                        sort_order=len(selected_slugs),
+                    )
                     db.add(plan)
                 else:
+                    # Deliberately does NOT touch price_usd: overwriting it
+                    # would wipe the markup configured in the admin on every
+                    # sync. Django recalculates it from the new cost.
                     for field, value in fields.items():
                         setattr(plan, field, value)
                 changes += 1
@@ -128,6 +153,10 @@ def main() -> int:
 
         if args.apply:
             db.commit()
+            print(
+                "\nCosts written. Apply the markup rules with:\n"
+                "  cd ../QulaySIM-admin && python manage.py recalculate_prices"
+            )
             print(f"Applied {changes} catalogue changes.")
         else:
             db.rollback()
