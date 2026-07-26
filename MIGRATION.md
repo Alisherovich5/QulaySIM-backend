@@ -102,7 +102,7 @@ migratsiyalarini `QulaySIM-admin` dan qo'llab, keyin shu testni ishga tushiradi.
 - **Celery**: 6 vazifa, beat jadvali, eksponensial backoff, `acks_late`.
 - **CI**: ruff + format + mypy strict + testlar (Django migratsiyalari bilan)
   + Docker build.
-- **Testlar**: 0 dan 88 ga, 74% qamrov.
+- **Testlar**: 0 dan 96 ga, 74% qamrov.
 
 ## Tekshirilgan holat
 
@@ -110,7 +110,7 @@ migratsiyalarini `QulaySIM-admin` dan qo'llab, keyin shu testni ishga tushiradi.
 ruff check      All checks passed
 ruff format     78 files already formatted
 mypy --strict   Success: no issues found in 68 source files
-pytest          88 passed, 74% coverage
+pytest          96 passed, 74% coverage
 docker build    Successfully tagged qulaysim-api:test (461 MB)
 konteyner       healthy, user=app, /docs → 404, HSTS mavjud
 frontend kontrakti  8/8 tip to'liq mos
