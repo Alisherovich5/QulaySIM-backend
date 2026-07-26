@@ -1,5 +1,26 @@
 name: qulaysim
 
+# The whole platform: storefront, API, Celery, the Django admin that owns the
+# schema, and the datastores. `docker compose up` brings up everything.
+#
+# Paths are relative to this file, so the three repositories must sit side by
+# side in the same parent directory.
+
+x-django-env: &django-env
+  DB_NAME: ${DB_NAME:-fastsim}
+  DB_USER: ${DB_USER:-fastsim}
+  DB_PASSWORD: ${DB_PASSWORD:-fastsim}
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  REDIS_URL: redis://redis:6379/0
+  SECRET_KEY: ${DJANGO_SECRET_KEY:?set DJANGO_SECRET_KEY in .env}
+  DEBUG: ${DJANGO_DEBUG:-False}
+  ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-*}
+
+x-api-env: &api-env
+  DATABASE_URL: postgresql+asyncpg://${DB_USER:-fastsim}:${DB_PASSWORD:-fastsim}@postgres:5432/${DB_NAME:-fastsim}
+  REDIS_URL: redis://redis:6379/0
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,13 +30,12 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-fastsim}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fastsim} -d ${DB_NAME:-fastsim}"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 12
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -26,68 +46,97 @@ services:
       --maxmemory-policy allkeys-lru
     volumes:
       - redisdata:/data
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 12
+    restart: unless-stopped
+
+  # Django owns every migration. Everything that touches the database waits
+  # for this to finish, so the API never starts against a half-built schema.
+  migrate:
+    build:
+      context: ../QulaySIM-admin
+    command: python manage.py migrate --noinput
+    environment: *django-env
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
 
   api:
     build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-fastsim}:${DB_PASSWORD:-fastsim}@postgres:5432/${DB_NAME:-fastsim}
-      REDIS_URL: redis://redis:6379/0
+    env_file: [.env]
+    environment: *api-env
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8001}:8000"
     restart: unless-stopped
 
   worker:
     build: .
     command: celery -A app.workers.celery_app.celery_app worker --loglevel=INFO --concurrency=4
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-fastsim}:${DB_PASSWORD:-fastsim}@postgres:5432/${DB_NAME:-fastsim}
-      REDIS_URL: redis://redis:6379/0
+    env_file: [.env]
+    environment: *api-env
     depends_on:
-      postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
 
   beat:
     build: .
-    command: celery -A app.workers.celery_app.celery_app beat --loglevel=INFO
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${DB_USER:-fastsim}:${DB_PASSWORD:-fastsim}@postgres:5432/${DB_NAME:-fastsim}
-      REDIS_URL: redis://redis:6379/0
+    command: >
+      celery -A app.workers.celery_app.celery_app beat --loglevel=INFO
+      --schedule=/var/lib/celery/beat-schedule
+    env_file: [.env]
+    environment: *api-env
+    volumes:
+      # Persist the schedule so a restart does not re-fire everything that was
+      # due while the container was down.
+      - beatdata:/var/lib/celery
+    # The image ships the API's HTTP healthcheck; beat serves no HTTP, so it
+    # would sit unhealthy forever. Check the schedule file is being written
+    # instead — that is what "beat is alive" actually means.
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/lib/celery/beat-schedule || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     depends_on:
       redis: {condition: service_healthy}
     restart: unless-stopped
 
-  # Django owns the schema: it runs the migrations this API maps onto.
   admin:
     build:
       context: ../QulaySIM-admin
-    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8001"
-    environment:
-      DB_NAME: ${DB_NAME:-fastsim}
-      DB_USER: ${DB_USER:-fastsim}
-      DB_PASSWORD: ${DB_PASSWORD:-fastsim}
-      DB_HOST: postgres
-      DEBUG: "true"
-      SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-not-for-production}
+    environment: *django-env
     depends_on:
       postgres: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
     ports:
-      - "8001:8001"
-    profiles: ["full"]
+      - "${ADMIN_PORT:-8002}:8000"
+    restart: unless-stopped
+
+  storefront:
+    build:
+      context: ../QulaySIM
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    restart: unless-stopped
 
 volumes:
   pgdata:
   redisdata:
+  beatdata:

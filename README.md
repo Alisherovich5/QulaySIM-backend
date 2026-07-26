@@ -54,9 +54,23 @@ the money rules testable without infrastructure.
 ## Running it
 
 ```bash
-docker compose up            # api + worker + beat + postgres + redis
-docker compose --profile full up   # ...and the Django admin on :8001
+cp .env.example .env         # fill in JWT_SECRET and DJANGO_SECRET_KEY
+docker compose up -d         # the whole platform
+docker compose exec api python -m scripts.seed    # demo catalogue
 ```
+
+| Service    | URL                     | Notes                                   |
+|------------|-------------------------|-----------------------------------------|
+| storefront | http://localhost:8080   | nginx; proxies `/api` to the API         |
+| API        | http://localhost:8001   | also reachable same-origin via `:8080`   |
+| admin      | http://localhost:8002   | Django, owns the schema                  |
+
+Postgres and Redis are not published to the host — nothing outside the stack
+needs them. The `migrate` service runs Django's migrations and every other
+service waits for it, so the API never starts against a half-built schema.
+
+Serving the storefront and the API from one origin means the refresh cookie is
+first-party and no CORS preflight is involved.
 
 Locally:
 

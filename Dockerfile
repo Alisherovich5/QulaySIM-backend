@@ -28,6 +28,13 @@ RUN groupadd --system --gid 1001 app \
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /srv
 COPY --chown=app:app app ./app
+# Operational entry points: seeding and the supplier catalogue sync have to be
+# runnable inside the container, not only from a developer's checkout.
+COPY --chown=app:app scripts ./scripts
+
+# Celery beat writes its schedule to disk. The working directory is root-owned
+# and the container runs unprivileged, so give beat somewhere it can write.
+RUN install -d -o app -g app /var/lib/celery
 
 USER app
 EXPOSE 8000

@@ -1,0 +1,22 @@
+# Never ship secrets into a build context.
+.env
+.env.*
+!.env.example
+
+# Local tooling — 250 MB of virtualenv the daemon does not need.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+.git/
+.github/
+tests/
+# scripts/ is deliberately NOT ignored: the image needs the sync and seed commands.
+*.md
+*.log
