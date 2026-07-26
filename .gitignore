@@ -1,0 +1,17 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Python environments and generated files
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.log
+
+# Local databases and uploads
+*.db
+*.sqlite3
+uploads/
+media/
