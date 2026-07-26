@@ -16,14 +16,18 @@ def _escape(value: str) -> str:
     return html.escape(value.strip())[:2000]
 
 
-async def send_support_message(*, name: str, contact: str, message: str, client_ip: str) -> None:
+async def send_support_message(
+    *, name: str, email: str, phone: str, locale: str, message: str, client_ip: str
+) -> None:
     if not settings.telegram_bot_token or not settings.telegram_chat_id:
         raise ServiceUnavailableError("Support chat is being configured")
 
     body = (
         "<b>New QulaySIM support request</b>\n\n"
         f"<b>Name:</b> {_escape(name)}\n"
-        f"<b>Contact:</b> {_escape(contact)}\n"
+        f"<b>Email:</b> {_escape(email)}\n"
+        f"<b>Phone:</b> {_escape(phone)}\n"
+        f"<b>Locale:</b> {_escape(locale)}\n"
         f"<b>IP:</b> {_escape(client_ip)}\n\n"
         f"{_escape(message)}"
     )

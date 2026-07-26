@@ -19,7 +19,9 @@ router = APIRouter(prefix="/api/support", tags=["support"])
 async def create_support_message(payload: SupportMessageIn, request: Request) -> SupportMessageOut:
     await service.submit_support_message(
         name=payload.name,
-        contact=payload.contact,
+        email=payload.email,
+        phone=payload.phone,
+        locale=payload.locale,
         message=payload.message,
         client_ip=client_ip(request),
     )

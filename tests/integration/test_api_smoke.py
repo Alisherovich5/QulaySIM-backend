@@ -138,3 +138,38 @@ class TestWebhookAuth:
     async def test_missing_token_rejected(self, client: AsyncClient) -> None:
         response = await client.post("/api/webhooks/esimaccess", json={})
         assert response.status_code == 401
+
+
+class TestSupportContract:
+    """The support form payload is defined by the storefront (Support.tsx).
+
+    Regression guard: the schema was once changed to a `contact` field, which
+    made every message from the real form fail validation.
+    """
+
+    async def test_accepts_the_storefront_payload(self, client: AsyncClient) -> None:
+        response = await client.post(
+            "/api/support/message",
+            json={
+                "name": "Test User",
+                "email": "customer@example.com",
+                "phone": "+998 90 123 45 67",
+                "message": "This mirrors exactly what the support form sends.",
+                "locale": "uz",
+            },
+        )
+        # 202 when Telegram is configured, 503 when it is not — never 422.
+        assert response.status_code in (202, 503), response.text
+
+    async def test_rejects_a_malformed_phone(self, client: AsyncClient) -> None:
+        response = await client.post(
+            "/api/support/message",
+            json={
+                "name": "Test User",
+                "email": "customer@example.com",
+                "phone": "998901234567",
+                "message": "Unformatted phone number should be rejected.",
+                "locale": "uz",
+            },
+        )
+        assert response.status_code == 422
