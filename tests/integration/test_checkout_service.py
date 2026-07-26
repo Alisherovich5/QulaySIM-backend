@@ -85,8 +85,37 @@ class TestPriceCart:
 
 
 class TestCheckoutGate:
-    async def test_payments_disabled_returns_503(self, session, plan: Plan) -> None:
+    """Placing an order must be impossible unless a provider is actually
+    configured — otherwise a customer gets an order they can never pay for."""
+
+    async def test_disabled_provider_is_refused(self, session, plan: Plan, monkeypatch) -> None:
+        from app.core.config import settings
         from app.core.errors import ServiceUnavailableError
+        from app.db.models import Customer
+        from app.services import orders as order_service
+
+        monkeypatch.setattr(settings, "payment_provider", "disabled")
+        customer = Customer(email="gate@example.com", hashed_password="x")
 
         with pytest.raises(ServiceUnavailableError):
-            await service.place_order(session, 1, [CartItemIn(plan_id=plan.id, quantity=1)], None)
+            await order_service.place_order(
+                session, customer, [CartItemIn(plan_id=plan.id, quantity=1)], None
+            )
+
+    async def test_payme_without_a_merchant_id_is_refused(
+        self, session, plan: Plan, monkeypatch
+    ) -> None:
+        """A blank merchant id would produce a checkout link that 404s."""
+        from app.core.config import settings
+        from app.core.errors import ServiceUnavailableError
+        from app.db.models import Customer
+        from app.services import orders as order_service
+
+        monkeypatch.setattr(settings, "payment_provider", "payme")
+        monkeypatch.setattr(settings, "payme_merchant_id", "")
+        customer = Customer(email="gate2@example.com", hashed_password="x")
+
+        with pytest.raises(ServiceUnavailableError):
+            await order_service.place_order(
+                session, customer, [CartItemIn(plan_id=plan.id, quantity=1)], None
+            )

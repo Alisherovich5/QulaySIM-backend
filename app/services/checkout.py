@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import DomainError, ServiceUnavailableError
+from app.core.errors import DomainError
 from app.db.models import PromoCode
 from app.domain.pricing import PricedLine, PricingError, PromoRule, Quote, build_quote
 from app.repositories import catalog as catalog_repo
@@ -54,23 +54,3 @@ async def price_cart(
         return build_quote(lines, _to_rule(promo), promo_requested=bool(promo_code))
     except PricingError as exc:
         raise DomainError(str(exc)) from exc
-
-
-async def place_order(
-    session: AsyncSession,
-    customer_id: int,
-    items: list[CartItemIn],
-    promo_code: str | None,
-) -> None:
-    """Orders are only created after a payment provider confirms the charge.
-
-    No provider is wired up yet, so this deliberately refuses rather than
-    creating an unpaid order and provisioning a supplier eSIM against it.
-    """
-    from app.core.config import settings
-
-    if settings.payment_provider == "disabled":
-        raise ServiceUnavailableError(
-            "Online payments are being configured. Please try again soon."
-        )
-    raise DomainError("Configured payment provider is not implemented", code="not_implemented")

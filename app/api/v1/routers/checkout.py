@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, status
 
 from app.api.deps import CurrentCustomer, SessionDep
-from app.schemas.commerce import QuoteIn, QuoteLineOut, QuoteOut
+from app.schemas.commerce import (
+    OrderPlacedOut,
+    QuoteIn,
+    QuoteLineOut,
+    QuoteOut,
+)
 from app.services import checkout as service
+from app.services import orders as order_service
 
 router = APIRouter(prefix="/api/checkout", tags=["checkout"])
 
@@ -31,6 +37,19 @@ async def quote(payload: QuoteIn, session: SessionDep) -> QuoteOut:
     )
 
 
-@router.post("")
-async def checkout(payload: QuoteIn, session: SessionDep, customer: CurrentCustomer) -> None:
-    await service.place_order(session, customer.id, payload.items, payload.promo_code)
+@router.post("", response_model=OrderPlacedOut, status_code=status.HTTP_201_CREATED)
+async def place_order(
+    payload: QuoteIn, session: SessionDep, customer: CurrentCustomer
+) -> OrderPlacedOut:
+    """Create a pending order and return the link that pays for it.
+
+    The order carries no eSIM until Payme confirms the charge, so abandoning
+    this step costs nothing.
+    """
+    placed = await order_service.place_order(session, customer, payload.items, payload.promo_code)
+    return OrderPlacedOut.model_validate(placed)
+
+
+@router.post("/{order_id}/cancel", status_code=status.HTTP_204_NO_CONTENT)
+async def cancel_order(order_id: int, session: SessionDep, customer: CurrentCustomer) -> None:
+    await order_service.cancel_unpaid_order(session, customer, order_id)

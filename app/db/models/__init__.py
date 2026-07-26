@@ -20,7 +20,14 @@ from app.db.models.enums import (
     Provider,
     ReferralStatus,
 )
-from app.db.models.orders import ESIM, Order, OrderItem, Payment, PromoCode
+from app.db.models.orders import (
+    ESIM,
+    Order,
+    OrderItem,
+    Payment,
+    PaymeTransaction,
+    PromoCode,
+)
 
 __all__ = [
     "ESIM",
@@ -36,6 +43,7 @@ __all__ = [
     "Order",
     "OrderItem",
     "OrderStatus",
+    "PaymeTransaction",
     "Payment",
     "PaymentStatus",
     "Plan",

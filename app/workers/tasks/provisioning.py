@@ -113,3 +113,131 @@ def grant_referral_reward(customer_id: int) -> str | None:
 
     logger.info("referral.rewarded", customer_id=customer_id, code=code)
     return code
+
+
+@celery_app.task(
+    name="provisioning.fulfil_paid_order",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=10,
+)
+def fulfil_paid_order(self: Task, order_id: int) -> str:
+    """Everything that happens once money is captured.
+
+    Runs off the request because Payme is waiting on the PerformTransaction
+    response: a slow supplier here would become a timeout Payme retries, and
+    the retry would find the order already paid.
+
+    Ordered so the customer-visible part comes first and the reward last —
+    if the reward fails the retry must not re-place a supplier order, which is
+    why the supplier step is skipped once provider_order_no is set.
+    """
+    from app.db.models.enums import OrderStatus
+
+    with worker_session() as session:
+        order = session.get(Order, order_id)
+        if order is None:
+            logger.warning("fulfil.order_missing", order_id=order_id)
+            return "missing"
+        if order.status != OrderStatus.PAID:
+            logger.warning("fulfil.order_not_paid", order_id=order_id, status=order.status)
+            return "not_paid"
+
+        redeemed = _redeem_promo(session, order)
+        customer_id = order.customer_id
+        already_ordered = bool(order.provider_order_no)
+
+    if not already_ordered:
+        placed = _place_supplier_order(order_id, attempt=self.request.retries)
+        if placed:
+            synchronise_supplier_order.delay(order_id)
+    else:
+        synchronise_supplier_order.delay(order_id)
+
+    grant_referral_reward.delay(customer_id)
+
+    logger.info("fulfil.done", order_id=order_id, promo_redeemed=redeemed)
+    return "ok"
+
+
+def _redeem_promo(session: object, order: Order) -> bool:
+    """Count the promo use now that the money is real.
+
+    Uses an atomic UPDATE with the cap in the WHERE clause, so two orders
+    redeeming the last remaining use cannot both succeed.
+    """
+    from sqlalchemy import or_, update
+
+    from app.db.models import PromoCode
+
+    if not order.promo_code_id:
+        return False
+
+    result = session.execute(  # type: ignore[attr-defined]
+        update(PromoCode)
+        .where(
+            PromoCode.id == order.promo_code_id,
+            or_(PromoCode.max_uses == 0, PromoCode.used_count < PromoCode.max_uses),
+        )
+        .values(used_count=PromoCode.used_count + 1)
+    )
+    redeemed = bool(result.rowcount)
+    if not redeemed:
+        # The order is already paid, so this is reported rather than refused.
+        logger.warning("fulfil.promo_over_limit", order_id=order.id)
+    return redeemed
+
+
+def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
+    """Order the eSIM profiles from the supplier.
+
+    `transaction_id` is our order id so the supplier deduplicates a retry
+    instead of allocating a second set of profiles we would pay for twice.
+    """
+    from app.core.config import settings
+
+    if settings.esim_provider != "esimaccess":
+        logger.info("fulfil.supplier_skipped", order_id=order_id, provider=settings.esim_provider)
+        return False
+
+    from app.integrations.esim_access import (
+        EsimAccessClient,
+        EsimAccessError,
+        EsimAccessPackage,
+    )
+
+    with worker_session() as session:
+        order = session.get(Order, order_id)
+        if order is None:
+            return False
+        packages = [
+            EsimAccessPackage(slug=item.plan.provider_package_code, count=item.quantity)
+            for item in order.items
+            if item.plan.provider == "esimaccess" and item.plan.provider_package_code
+        ]
+        if not packages:
+            logger.info("fulfil.no_supplier_packages", order_id=order_id)
+            return False
+
+        try:
+            response = EsimAccessClient().order_profiles(
+                transaction_id=f"qs-{order_id}", packages=packages
+            )
+        except EsimAccessError as exc:
+            logger.warning(
+                "fulfil.supplier_order_failed",
+                order_id=order_id,
+                attempt=attempt,
+                error=str(exc),
+            )
+            raise
+
+        order.provider = "esimaccess"
+        order.provider_order_no = str((response.get("obj") or {}).get("orderNo") or "")
+        order.provider_status = "ORDERED"
+
+    logger.info("fulfil.supplier_ordered", order_id=order_id)
+    return True

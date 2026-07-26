@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, utcnow
@@ -36,6 +36,9 @@ class Order(Base):
     discount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     total: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     promo_code_id: Mapped[int | None] = mapped_column(ForeignKey("orders_promocode.id"))
+    # Frozen at checkout — see the Django model for why.
+    amount_uzs: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
+    exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider: Mapped[str] = mapped_column(String(20), default="mock")
@@ -99,3 +102,26 @@ class Payment(Base):
     status: Mapped[str] = mapped_column(String(10), default="success")
     provider_ref: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PaymeTransaction(Base):
+    """Mirrors orders_paymetransaction — see the Django model for the state
+    machine. States are Payme's: 1 created, 2 performed, -1 cancelled,
+    -2 cancelled after perform."""
+
+    __tablename__ = "orders_paymetransaction"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders_order.id"))
+    transaction_id: Mapped[str] = mapped_column(String(64), unique=True)
+    amount_tiyin: Mapped[int] = mapped_column(BigInteger)
+    account: Mapped[str] = mapped_column(String(64))
+    state: Mapped[int] = mapped_column(Integer, default=1)
+    reason: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    create_time: Mapped[int] = mapped_column(BigInteger, default=0)
+    perform_time: Mapped[int] = mapped_column(BigInteger, default=0)
+    cancel_time: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    order: Mapped[Order] = relationship()

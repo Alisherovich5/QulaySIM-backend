@@ -70,3 +70,17 @@ class OrderOut(APIModel):
 
 class TopUpIn(APIModel):
     extra_mb: int = Field(ge=256, le=51200)
+
+
+class OrderPlacedOut(APIModel):
+    """What the storefront needs to send the customer to Payme.
+
+    Both currencies are returned because the customer agreed to a USD price
+    but will be charged the som amount frozen here.
+    """
+
+    order_id: int
+    total_usd: Money
+    amount_uzs: Money
+    exchange_rate: Money
+    payment_url: str

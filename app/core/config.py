@@ -59,7 +59,19 @@ class Settings(BaseSettings):
     cache_ttl_currency: int = 21600
 
     # --- Providers ---------------------------------------------------------
-    payment_provider: Literal["disabled", "mock"] = "disabled"
+    payment_provider: Literal["disabled", "mock", "payme"] = "disabled"
+
+    # --- Payme (Paycom) ----------------------------------------------------
+    # The merchant key authenticates Payme's calls to us. The test key is
+    # accepted alongside it so the same deployment can run Payme's sandbox
+    # suite without a second environment.
+    payme_merchant_id: str = ""
+    payme_merchant_key: str = ""
+    payme_test_key: str = ""
+    payme_checkout_url: str = "https://checkout.paycom.uz"
+    # The key inside Payme's `account` object. Must match the merchant cabinet.
+    payme_account_field: str = "order_id"
+    payme_return_url: str = ""
     esim_provider: Literal["mock", "esimaccess"] = "mock"
     esimaccess_base_url: str = "https://api.esimaccess.com"
     esimaccess_access_code: str = ""

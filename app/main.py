@@ -16,6 +16,7 @@ from app.api.v1.routers import (
     checkout,
     content,
     health,
+    payme,
     support,
     webhooks,
 )
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
         content.router,
         checkout.router,
         account.router,
+        payme.router,
         support.router,
         webhooks.router,
     ):
