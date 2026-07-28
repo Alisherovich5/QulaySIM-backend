@@ -72,7 +72,15 @@ class Settings(BaseSettings):
     # The key inside Payme's `account` object. Must match the merchant cabinet.
     payme_account_field: str = "order_id"
     payme_return_url: str = ""
-    esim_provider: Literal["mock", "esimaccess"] = "mock"
+    # Master switch only. Which wholesaler fulfils a given order is decided per
+    # plan by the cheapest supplier offer (see app/integrations/suppliers.py);
+    # this just says whether real supplier calls happen at all, so "mock" stays
+    # the safe default for a deployment with no supplier balance yet.
+    #
+    # "esimaccess" is the pre-comparison spelling of "live" and is still
+    # accepted, because rejecting it would stop the API booting on any host
+    # whose .env predates multi-supplier sourcing.
+    esim_provider: Literal["mock", "live", "esimaccess"] = "mock"
     esimaccess_base_url: str = "https://api.esimaccess.com"
     esimaccess_access_code: str = ""
     esimaccess_secret_key: str = ""
@@ -101,6 +109,11 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def supplier_calls_enabled(self) -> bool:
+        """Whether fulfilment may spend real money with a wholesaler."""
+        return self.esim_provider != "mock"
 
     @property
     def sync_database_url(self) -> str:

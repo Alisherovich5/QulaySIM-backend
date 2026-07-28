@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -64,6 +65,22 @@ class Plan(Base):
 
     country: Mapped[Country | None] = relationship(back_populates="plans")
     region: Mapped[Region | None] = relationship()
+    offers: Mapped[list["SupplierOffer"]] = relationship(
+        back_populates="plan", order_by="SupplierOffer.cost_usd"
+    )
+
+    @property
+    def fallback_offers(self) -> list["SupplierOffer"]:
+        """Usable offers other than the one this plan is currently routed to.
+
+        Cheapest first. Fulfilment walks this when the primary supplier
+        refuses, so a single supplier outage does not strand a paid order.
+        """
+        return [
+            offer
+            for offer in sorted(self.offers, key=lambda o: (o.cost_usd, o.provider))
+            if offer.is_available and offer.provider != self.provider
+        ]
 
     @property
     def data_label(self) -> str:
@@ -72,3 +89,27 @@ class Plan(Base):
         if self.data_amount_mb % 1024 == 0:
             return f"{self.data_amount_mb // 1024} GB"
         return f"{self.data_amount_mb} MB"
+
+
+class SupplierOffer(Base):
+    """One supplier's wholesale price for a plan. Owned by the Django admin.
+
+    Read-only here. The winning offer is already denormalised onto
+    `Plan.provider` / `Plan.cost_usd`, so pricing and the storefront never need
+    to consult this table; fulfilment reads it only to find a fallback route
+    when the primary supplier refuses an order.
+    """
+
+    __tablename__ = "catalog_supplieroffer"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("catalog_plan.id"))
+    provider: Mapped[str] = mapped_column(String(20))
+    package_code: Mapped[str] = mapped_column(String(120))
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(8, 2))
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    unavailable_reason: Mapped[str] = mapped_column(String(200), default="")
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    plan: Mapped[Plan] = relationship(back_populates="offers")
