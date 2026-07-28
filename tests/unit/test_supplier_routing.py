@@ -221,3 +221,39 @@ class TestSupplierErrorContract:
             suppliers.EsimAccessSupplier().place_order(
                 transaction_id="qs-1", lines=[SupplierLine("TR_5_30", 1)]
             )
+
+
+class TestRegisteredSuppliersAreCallable:
+    """Exercise the real adapters, not stubs.
+
+    The stubs in TestUsableRoutes define is_configured as a method, so they
+    could not catch the registered adapter calling a property as one — which
+    raised TypeError and took down route selection for every order.
+    """
+
+    def test_every_registered_supplier_reports_configuration(self, monkeypatch):
+        from app.integrations import suppliers
+
+        for key in ("esimaccess",):
+            supplier = suppliers.get_supplier(key)
+            assert supplier is not None, key
+            assert isinstance(supplier.is_configured(), bool)
+
+    def test_usable_routes_survives_a_real_adapter(self, monkeypatch):
+        from app.core.config import settings
+        from app.integrations import suppliers
+
+        monkeypatch.setattr(settings, "esimaccess_access_code", "probe-code")
+        plan = FakePlan(offers=[offer("esimaccess", "4.20")])
+
+        routes = suppliers.usable_routes_for(FakeOrder([FakeItem(plan)]))
+        assert [route.provider for route in routes] == ["esimaccess"]
+
+    def test_missing_credentials_drop_the_route(self, monkeypatch):
+        from app.core.config import settings
+        from app.integrations import suppliers
+
+        monkeypatch.setattr(settings, "esimaccess_access_code", "")
+        plan = FakePlan(offers=[offer("esimaccess", "4.20")])
+
+        assert suppliers.usable_routes_for(FakeOrder([FakeItem(plan)])) == []

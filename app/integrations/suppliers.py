@@ -76,7 +76,9 @@ class EsimAccessSupplier:
     def is_configured(self) -> bool:
         from app.integrations.esim_access import EsimAccessClient
 
-        return EsimAccessClient().is_configured()
+        # A property on the client, not a method — calling the bool would raise
+        # and take down route selection for every order.
+        return EsimAccessClient().is_configured
 
     def place_order(self, *, transaction_id: str, lines: list[SupplierLine]) -> str:
         from app.integrations.esim_access import (
