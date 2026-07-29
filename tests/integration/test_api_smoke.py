@@ -344,3 +344,61 @@ class TestRefreshIsRateLimited:
                 r = await bare.post("/api/auth/refresh", json={"refresh_token": "nope"})
                 codes.append(r.status_code)
         assert 429 in codes, f"never throttled: {codes}"
+
+
+class TestPriceNoteReachesTheStorefront:
+    """The note is the only reason the field exists, so assert it arrives.
+
+    A field added to the ORM but forgotten in the response schema is silent:
+    the admin saves the text and the site simply never shows it.
+    """
+
+    async def test_plans_carry_a_price_note_field(self, client: AsyncClient) -> None:
+        countries = (await client.get("/api/countries?limit=1")).json()
+        if not countries:
+            pytest.skip("catalogue is empty; run scripts.seed")
+        detail = (await client.get(f"/api/countries/{countries[0]['slug']}")).json()
+        if not detail["plans"]:
+            pytest.skip("no plans on the first country")
+
+        for plan in detail["plans"]:
+            assert "price_note" in plan, "price_note missing from the plan payload"
+            assert isinstance(plan["price_note"], str)
+
+    async def test_a_saved_note_is_served(self, client: AsyncClient) -> None:
+        from sqlalchemy import select
+
+        from app.db.models import Country, Plan
+        from app.db.session import SessionFactory
+        from app.services.catalog import invalidate_catalog
+
+        async with SessionFactory() as session:
+            row = (
+                await session.execute(
+                    select(Plan, Country.slug)
+                    .join(Country, Plan.country_id == Country.id)
+                    .where(Plan.is_active.is_(True), Country.is_active.is_(True))
+                    .limit(1)
+                )
+            ).first()
+            if row is None:
+                pytest.skip("catalogue is empty; run scripts.seed")
+            plan, slug = row
+            plan_id, original = plan.id, plan.price_note
+            plan.price_note = "+ 200 USD deposit"
+            await session.commit()
+
+        # The catalogue is cached, so a write alone proves nothing about what a
+        # visitor actually sees.
+        await invalidate_catalog()
+        try:
+            detail = (await client.get(f"/api/countries/{slug}")).json()
+            served = [p for p in detail["plans"] if p["id"] == plan_id]
+            assert served, f"plan {plan_id} missing from /api/countries/{slug}"
+            assert served[0]["price_note"] == "+ 200 USD deposit"
+        finally:
+            async with SessionFactory() as session:
+                restore = await session.get(Plan, plan_id)
+                restore.price_note = original
+                await session.commit()
+            await invalidate_catalog()

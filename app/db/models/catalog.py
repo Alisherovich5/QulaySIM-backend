@@ -50,11 +50,15 @@ class Plan(Base):
     # Supplier cost and markup are internal: they are mapped so workers and
     # reports can read them, but they must never reach a customer-facing
     # schema. `tests/integration/test_api_smoke.py` enforces that.
-    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     markup_percent: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
     price_locked: Mapped[bool] = mapped_column(Boolean, default=False)
     # Decimal, not float: money must never round-trip through binary floating point.
-    price_usd: Mapped[Decimal] = mapped_column(Numeric(8, 2))
+    price_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # Customer-facing text beside the price — "+ deposit" and the like. Never
+    # parsed: every calculation reads price_usd, so this can say anything
+    # without putting arithmetic at risk.
+    price_note: Mapped[str] = mapped_column(String(120), default="")
     network_type: Mapped[str] = mapped_column(String(2), default="4G")
     supports_hotspot: Mapped[bool] = mapped_column(Boolean, default=True)
     provider: Mapped[str] = mapped_column(String(20), default="mock")
@@ -106,7 +110,7 @@ class SupplierOffer(Base):
     plan_id: Mapped[int] = mapped_column(ForeignKey("catalog_plan.id"))
     provider: Mapped[str] = mapped_column(String(20))
     package_code: Mapped[str] = mapped_column(String(120))
-    cost_usd: Mapped[Decimal] = mapped_column(Numeric(8, 2))
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     is_available: Mapped[bool] = mapped_column(Boolean, default=True)
     unavailable_reason: Mapped[str] = mapped_column(String(200), default="")
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

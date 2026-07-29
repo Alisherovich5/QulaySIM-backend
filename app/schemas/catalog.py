@@ -18,6 +18,8 @@ class PlanOut(APIModel):
     data_label: str
     validity_days: int
     price_usd: Money
+    # Empty for almost every plan; the storefront renders it only when set.
+    price_note: str = ""
     network_type: str
     supports_hotspot: bool
     is_popular: bool
