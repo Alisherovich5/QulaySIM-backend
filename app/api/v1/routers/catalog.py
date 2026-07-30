@@ -38,3 +38,12 @@ async def list_countries(
 @router.get("/countries/{slug}")
 async def country_detail(slug: str, session: SessionDep) -> JSONDict:
     return await service.get_country(session, slug)
+
+
+@router.get("/plans/popular")
+async def popular_plans(
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=24)] = 6,
+) -> JSONList:
+    """Plans marked popular in the admin, for the landing page."""
+    return await service.list_popular_plans(session, limit=limit)

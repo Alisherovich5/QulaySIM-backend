@@ -13,7 +13,13 @@ from app.core.config import settings
 from app.core.errors import NotFoundError
 from app.repositories import catalog as repo
 from app.schemas.base import JSONDict, JSONList
-from app.schemas.catalog import CountryDetailOut, CountryOut, PlanOut, RegionOut
+from app.schemas.catalog import (
+    CountryDetailOut,
+    CountryOut,
+    PlanOut,
+    PopularPlanOut,
+    RegionOut,
+)
 
 
 async def list_regions(session: AsyncSession) -> JSONList:
@@ -78,5 +84,30 @@ async def get_country(session: AsyncSession, slug: str) -> JSONDict:
     return await get_or_set(cache_key("country", slug=slug), settings.cache_ttl_catalog, produce)
 
 
+async def list_popular_plans(session: AsyncSession, *, limit: int) -> JSONList:
+    async def produce() -> JSONList:
+        rows = await repo.list_popular_plans(session, limit=limit)
+        out: JSONList = []
+        for plan, country in rows:
+            # Validate the plan through PlanOut first so the field whitelist is
+            # the one place deciding what leaves the service, then attach the
+            # destination. Building the dict by hand would let a future column
+            # on Plan slip out without passing that whitelist.
+            model = PopularPlanOut(
+                **PlanOut.model_validate(plan).model_dump(),
+                country_name=country.name,
+                country_slug=country.slug,
+                country_iso2=country.iso2,
+            )
+            out.append(model.model_dump(mode="json"))
+        return out
+
+    return await get_or_set(
+        cache_key("popular_plans", limit=limit), settings.cache_ttl_catalog, produce
+    )
+
+
 async def invalidate_catalog() -> int:
-    return await invalidate("qs:regions*", "qs:countries*", "qs:country*")
+    return await invalidate(
+        "qs:regions*", "qs:countries*", "qs:country*", "qs:popular_plans*"
+    )

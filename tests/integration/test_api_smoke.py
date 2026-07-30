@@ -479,3 +479,37 @@ class TestSitemapAndRobots:
                 restore.is_active = True
                 await session.commit()
             await invalidate("qs:sitemap*")
+
+
+class TestPopularPlans:
+    """The landing page shows plans outside any country page, so each one has to
+    carry its destination — and internal pricing must not ride along with it.
+    """
+
+    async def test_each_plan_carries_its_destination(self, client: AsyncClient) -> None:
+        plans = (await client.get("/api/plans/popular")).json()
+        if not plans:
+            pytest.skip("no plans are marked popular")
+        for plan in plans:
+            for field in ("country_name", "country_slug", "country_iso2"):
+                assert plan.get(field), f"{field} missing — the card cannot link anywhere"
+
+    async def test_one_plan_per_destination(self, client: AsyncClient) -> None:
+        plans = (await client.get("/api/plans/popular?limit=24")).json()
+        slugs = [p["country_slug"] for p in plans]
+        # Six tariffs for one country is a worse landing page than six countries.
+        assert len(slugs) == len(set(slugs)), f"duplicated destinations: {slugs}"
+
+    async def test_cheapest_first(self, client: AsyncClient) -> None:
+        prices = [p["price_usd"] for p in (await client.get("/api/plans/popular")).json()]
+        assert prices == sorted(prices), prices
+
+    async def test_limit_is_honoured_and_bounded(self, client: AsyncClient) -> None:
+        assert len((await client.get("/api/plans/popular?limit=2")).json()) <= 2
+        assert (await client.get("/api/plans/popular?limit=0")).status_code == 422
+        assert (await client.get("/api/plans/popular?limit=500")).status_code == 422
+
+    async def test_no_internal_pricing_leaks(self, client: AsyncClient) -> None:
+        body = (await client.get("/api/plans/popular")).text
+        for field in ("cost_usd", "markup_percent", "price_locked", "provider"):
+            assert field not in body, f"{field} leaked to the landing page"

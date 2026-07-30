@@ -90,3 +90,38 @@ async def get_active_plans(session: AsyncSession, plan_ids: list[int]) -> dict[i
         select(Plan).where(Plan.id.in_(set(plan_ids)), Plan.is_active.is_(True))
     )
     return {plan.id: plan for plan in result.scalars().all()}
+
+
+async def list_popular_plans(session: AsyncSession, *, limit: int) -> list[tuple[Plan, Country]]:
+    """Popular, active plans with their destination, cheapest first.
+
+    Joined rather than loaded through the relationship so the query returns
+    exactly the rows rendered — one statement, no per-plan follow-up.
+
+    Only one plan per destination: six cards showing six tariffs for the same
+    country is a worse landing page than six countries, and the flags are what
+    make the section scannable.
+    """
+    rows = (
+        await session.execute(
+            select(Plan, Country)
+            .join(Country, Plan.country_id == Country.id)
+            .where(
+                Plan.is_active.is_(True),
+                Plan.is_popular.is_(True),
+                Country.is_active.is_(True),
+            )
+            .order_by(Plan.price_usd, Plan.id)
+        )
+    ).all()
+
+    seen: set[int] = set()
+    out: list[tuple[Plan, Country]] = []
+    for plan, country in rows:
+        if country.id in seen:
+            continue
+        seen.add(country.id)
+        out.append((plan, country))
+        if len(out) >= limit:
+            break
+    return out

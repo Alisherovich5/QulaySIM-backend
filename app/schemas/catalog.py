@@ -37,3 +37,16 @@ class CountryOut(APIModel):
 
 class CountryDetailOut(CountryOut):
     plans: list[PlanOut] = []
+
+
+class PopularPlanOut(PlanOut):
+    """A plan with enough of its destination attached to stand on its own.
+
+    The landing page shows plans outside any country page, so the country name,
+    slug and flag have to travel with each one — otherwise the card cannot say
+    where it is for or link anywhere.
+    """
+
+    country_name: str
+    country_slug: str
+    country_iso2: str
