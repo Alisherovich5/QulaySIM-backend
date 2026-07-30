@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # "esimaccess" is the pre-comparison spelling of "live" and is still
     # accepted, because rejecting it would stop the API booting on any host
     # whose .env predates multi-supplier sourcing.
+    # Public identifier, not a secret — it ships in the page. Empty disables the
+    # Google button rather than showing one that cannot work.
+    google_client_id: str = ""
     esim_provider: Literal["mock", "live", "esimaccess"] = "mock"
     esimaccess_base_url: str = "https://api.esimaccess.com"
     esimaccess_access_code: str = ""

@@ -17,7 +17,14 @@ from app.core.cookies import (
 from app.core.errors import AuthenticationError
 from app.core.ratelimit import RateLimit, client_ip, enforce
 from app.db.models import Customer
-from app.schemas.auth import CustomerOut, RefreshIn, RegisterIn, TokenOut
+from app.schemas.auth import (
+    CustomerOut,
+    GoogleIn,
+    ProvidersOut,
+    RefreshIn,
+    RegisterIn,
+    TokenOut,
+)
 from app.services import auth as auth_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -94,6 +101,39 @@ async def refresh(
     set_refresh_cookie(response, new_refresh)
     set_session_hint(response)
     return TokenOut(access_token=access, expires_in=ttl)
+
+
+@router.post(
+    "/google",
+    response_model=TokenOut,
+    # Same ceiling as login: unauthenticated, and each call costs a signature
+    # verification, so it must not be a free CPU sink either.
+    dependencies=[Depends(RateLimit("google", settings.rate_limit_login))],
+)
+async def google(payload: GoogleIn, session: SessionDep, response: Response) -> TokenOut:
+    """Exchange a Google ID token for our own session.
+
+    Returns 401 for any verification failure. The reason is logged, not
+    returned: the caller does not need to learn which check it failed, and the
+    front end only ever offers "try again or use a password".
+    """
+    customer = await auth_service.login_with_google(session, credential=payload.credential)
+    return _issue(response, customer)
+
+
+@router.get("/providers", response_model=ProvidersOut)
+async def providers() -> ProvidersOut:
+    """Which sign-in buttons the storefront should render.
+
+    The client id lives here rather than in the front-end build so that turning
+    Google on is an environment change on the server, not a rebuild — and so a
+    deployment without it shows no button instead of a broken one.
+    """
+    from app.integrations import google_auth
+
+    return ProvidersOut(
+        google_client_id=settings.google_client_id if google_auth.is_configured() else ""
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

@@ -114,6 +114,92 @@ async def authenticate(session: AsyncSession, *, email: str, password: str) -> C
     return customer
 
 
+async def login_with_google(session: AsyncSession, *, credential: str) -> Customer:
+    """Sign in (or sign up) with a verified Google identity.
+
+    Three cases, in this order, and the order is the security argument:
+
+    1. **Known provider id** — the link already exists, so use it. Checked first
+       because the provider's id is the only stable identifier; the address on
+       the Google account may since have changed.
+    2. **Unknown provider id, known e-mail** — link the two. Safe only because
+       `verify_id_token` refuses tokens whose e-mail Google has not verified;
+       without that check this branch would hand any account to whoever claimed
+       its address at Google.
+    3. **Neither** — create a passwordless customer. `hashed_password` stays
+       empty and `verify_password` refuses an empty hash, so the account cannot
+       later be entered with a guessed password.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from app.db.models import SocialAccount
+    from app.integrations.google_auth import GoogleAuthError, verify_id_token
+
+    try:
+        identity = verify_id_token(credential)
+    except GoogleAuthError as exc:
+        logger.info("auth.google_rejected", error=str(exc))
+        raise AuthenticationError("Could not verify this Google account") from None
+
+    link = (
+        await session.execute(
+            select(SocialAccount).where(
+                SocialAccount.provider == "google",
+                SocialAccount.provider_uid == identity.subject,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if link is not None:
+        customer = await session.get(Customer, link.customer_id)
+        if customer is None:  # pragma: no cover - FK makes this unreachable
+            raise AuthenticationError("Account not found")
+        if not customer.is_active:
+            raise AuthenticationError("Account disabled")
+        link.last_login_at = datetime.now(timezone.utc)
+        link.email = identity.email
+        await session.commit()
+        logger.info("auth.google_login", customer_id=customer.id, linked=True)
+        return customer
+
+    customer = await customer_repo.get_by_email(session, identity.email)
+    created = customer is None
+    if customer is None:
+        customer = Customer(
+            email=identity.email,
+            full_name=identity.full_name,
+            hashed_password="",
+            referral_code=await _unique_referral_code(session),
+        )
+        session.add(customer)
+        await session.flush()
+    elif not customer.is_active:
+        raise AuthenticationError("Account disabled")
+
+    session.add(
+        SocialAccount(
+            customer_id=customer.id,
+            provider="google",
+            provider_uid=identity.subject,
+            email=identity.email,
+            last_login_at=datetime.now(timezone.utc),
+        )
+    )
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Two tabs racing the same first sign-in. The link now exists, so the
+        # retry resolves through case 1 rather than failing the customer.
+        await session.rollback()
+        return await login_with_google(session, credential=credential)
+
+    await session.refresh(customer)
+    logger.info("auth.google_login", customer_id=customer.id, created=created)
+    return customer
+
+
 def issue_tokens(customer: Customer) -> tuple[str, str, int]:
     from app.core.config import settings
 

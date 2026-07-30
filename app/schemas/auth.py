@@ -59,3 +59,15 @@ class ProfileUpdateIn(APIModel):
     full_name: str | None = Field(default=None, max_length=150)
     current_password: str | None = None
     new_password: str | None = Field(default=None, min_length=MIN_PASSWORD_LENGTH, max_length=128)
+
+class GoogleIn(APIModel):
+    """The credential Google Identity Services hands the browser."""
+
+    # Bounded so a huge body is refused by validation before any crypto runs.
+    credential: str = Field(min_length=32, max_length=8192)
+
+
+class ProvidersOut(APIModel):
+    """Which social buttons to render, and with what public client id."""
+
+    google_client_id: str = ""

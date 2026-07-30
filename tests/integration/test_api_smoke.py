@@ -338,12 +338,18 @@ class TestRefreshIsRateLimited:
     async def test_repeated_bad_tokens_are_throttled(self, client: AsyncClient) -> None:
         """Unauthenticated and cheap to call — without a ceiling it is a free
         oracle for guessing refresh tokens."""
+        from app.core.config import settings
+
+        # Derived from the setting rather than hardcoded: this test previously
+        # pinned 14 requests against a limit of 10, so raising the limit failed
+        # the test without anything being wrong with the ceiling.
+        allowed = int(settings.rate_limit_login.split("/")[0])
         codes = []
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as bare:
-            for _ in range(14):
+            for _ in range(allowed + 4):
                 r = await bare.post("/api/auth/refresh", json={"refresh_token": "nope"})
                 codes.append(r.status_code)
-        assert 429 in codes, f"never throttled: {codes}"
+        assert 429 in codes, f"never throttled after {allowed + 4} calls: {codes}"
 
 
 class TestPriceNoteReachesTheStorefront:

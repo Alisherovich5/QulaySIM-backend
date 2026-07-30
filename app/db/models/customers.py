@@ -14,7 +14,8 @@ class Customer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(254), unique=True)
     full_name: Mapped[str] = mapped_column(String(150), default="")
-    hashed_password: Mapped[str] = mapped_column(String(255))
+    # Empty for provider-only accounts; verify_password refuses an empty hash.
+    hashed_password: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     referral_code: Mapped[str | None] = mapped_column(String(12), unique=True, nullable=True)
@@ -36,3 +37,24 @@ class Referral(Base):
     reward_code: Mapped[str] = mapped_column(String(40), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SocialAccount(Base):
+    """A provider identity linked to a customer. Schema owned by Django.
+
+    Keyed on the provider's own user id rather than the e-mail: an address can
+    change hands at the provider, and matching on it would hand the previous
+    owner's orders to whoever holds the address next.
+    """
+
+    __tablename__ = "customers_socialaccount"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers_customer.id"))
+    provider: Mapped[str] = mapped_column(String(20))
+    provider_uid: Mapped[str] = mapped_column(String(191))
+    email: Mapped[str] = mapped_column(String(254), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

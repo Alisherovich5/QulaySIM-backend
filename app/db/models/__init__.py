@@ -9,7 +9,7 @@ from app.db.models.content import (
     PromoBanner,
     Testimonial,
 )
-from app.db.models.customers import Customer, Referral
+from app.db.models.customers import Customer, SocialAccount, Referral
 from app.db.models.enums import (
     DiscountType,
     ESIMStatus,
@@ -36,6 +36,7 @@ __all__ = [
     "Benefit",
     "Country",
     "Customer",
+    "SocialAccount",
     "Device",
     "DiscountType",
     "ESIMStatus",
