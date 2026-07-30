@@ -408,3 +408,74 @@ class TestPriceNoteReachesTheStorefront:
                 restore.price_note = original
                 await session.commit()
             await invalidate_catalog()
+
+
+class TestSitemapAndRobots:
+    """Both were served as the SPA's index.html, which is a 200 that tells a
+    crawler nothing. robots.txt is a static file in the front end; the sitemap
+    has to come from here, because the list of destination pages is the
+    catalogue and a checked-in file goes stale the first time it changes.
+    """
+
+    async def test_sitemap_is_xml_not_html(self, client: AsyncClient) -> None:
+        response = await client.get("/sitemap.xml")
+        assert response.status_code == 200
+        assert "xml" in response.headers["content-type"]
+        assert response.text.startswith("<?xml")
+        assert "<!doctype html" not in response.text.lower()
+
+    async def test_sitemap_lists_the_static_pages(self, client: AsyncClient) -> None:
+        body = (await client.get("/sitemap.xml")).text
+        for path in ("/destinations", "/device-check", "/support"):
+            assert f"<loc>https://qulaysim.uz{path}</loc>" in body, path
+
+    async def test_sitemap_lists_active_destinations(self, client: AsyncClient) -> None:
+        from sqlalchemy import select
+
+        from app.db.models import Country
+        from app.db.session import SessionFactory
+
+        async with SessionFactory() as session:
+            active = (
+                await session.execute(
+                    select(Country.slug).where(Country.is_active.is_(True)).limit(3)
+                )
+            ).scalars().all()
+        if not active:
+            pytest.skip("catalogue is empty; run scripts.seed")
+
+        body = (await client.get("/sitemap.xml")).text
+        for slug in active:
+            assert f"/destinations/{slug}</loc>" in body, slug
+
+    async def test_inactive_destinations_are_not_listed(self, client: AsyncClient) -> None:
+        from sqlalchemy import select
+
+        from app.db.models import Country
+        from app.db.session import SessionFactory
+        from app.core.cache import invalidate
+
+        async with SessionFactory() as session:
+            country = (
+                await session.execute(
+                    select(Country).where(Country.is_active.is_(True)).limit(1)
+                )
+            ).scalar_one_or_none()
+            if country is None:
+                pytest.skip("catalogue is empty; run scripts.seed")
+            slug = country.slug
+            country.is_active = False
+            await session.commit()
+
+        await invalidate("qs:sitemap*")
+        try:
+            body = (await client.get("/sitemap.xml")).text
+            # Pointing a crawler at a page the site no longer serves is a
+            # self-inflicted soft 404.
+            assert f"/destinations/{slug}</loc>" not in body
+        finally:
+            async with SessionFactory() as session:
+                restore = await session.get(Country, country.id)
+                restore.is_active = True
+                await session.commit()
+            await invalidate("qs:sitemap*")

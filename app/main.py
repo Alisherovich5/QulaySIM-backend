@@ -89,7 +89,67 @@ def create_app() -> FastAPI:
     ):
         app.include_router(router)
 
+    _register_sitemap(app)
+
     return app
+
+
+def _register_sitemap(app: FastAPI) -> None:
+    """Serve /sitemap.xml from the API rather than shipping a static file.
+
+    The list of destination pages *is* the catalogue, so a file checked into the
+    front end goes stale the first time a country is added or deactivated. The
+    API already knows, and the answer is cached for a day.
+
+    Registered at the root, not under /api, because that is where crawlers look;
+    nginx proxies the single path across.
+    """
+    from fastapi import Response
+
+    from app.core.cache import cache_key, get_or_set
+    from app.db.session import SessionFactory
+
+    STATIC_PATHS = (
+        ("/", "1.0", "daily"),
+        ("/destinations", "0.9", "daily"),
+        ("/device-check", "0.7", "monthly"),
+        ("/support", "0.6", "monthly"),
+    )
+
+    @app.get("/sitemap.xml", include_in_schema=False)
+    async def sitemap() -> Response:
+        async def produce() -> str:
+            from sqlalchemy import select
+
+            from app.core.config import settings as cfg
+            from app.db.models import Country
+
+            base = (cfg.public_base_url or "https://qulaysim.uz").rstrip("/")
+            lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+                     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+            for path, priority, freq in STATIC_PATHS:
+                lines.append(
+                    f"  <url><loc>{base}{path}</loc>"
+                    f"<changefreq>{freq}</changefreq><priority>{priority}</priority></url>"
+                )
+            async with SessionFactory() as session:
+                slugs = (
+                    await session.execute(
+                        select(Country.slug)
+                        .where(Country.is_active.is_(True))
+                        .order_by(Country.slug)
+                    )
+                ).scalars().all()
+            for slug in slugs:
+                lines.append(
+                    f"  <url><loc>{base}/destinations/{slug}</loc>"
+                    f"<changefreq>weekly</changefreq><priority>0.8</priority></url>"
+                )
+            lines.append("</urlset>")
+            return "\n".join(lines)
+
+        body = await get_or_set(cache_key("sitemap"), 86400, produce)
+        return Response(content=body, media_type="application/xml")
 
 
 app = create_app()

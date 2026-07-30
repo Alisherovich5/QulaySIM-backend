@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # "esimaccess" is the pre-comparison spelling of "live" and is still
     # accepted, because rejecting it would stop the API booting on any host
     # whose .env predates multi-supplier sourcing.
+    # Absolute origin of the storefront. Used where a full URL has to be emitted
+    # rather than a relative path — the sitemap is the current case.
+    public_base_url: str = "https://qulaysim.uz"
     # Public identifier, not a secret — it ships in the page. Empty disables the
     # Google button rather than showing one that cannot work.
     google_client_id: str = ""
