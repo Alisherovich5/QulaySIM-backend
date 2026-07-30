@@ -48,8 +48,16 @@ class Settings(BaseSettings):
     cors_origins: str = ""
 
     # --- Rate limits (requests / window seconds) ---------------------------
-    rate_limit_login: str = "10/300"
-    rate_limit_register: str = "5/3600"
+    # Per-IP windows. Deliberately loose rather than tight: mobile carriers here
+    # put hundreds of subscribers behind one NAT address, so a strict per-IP cap
+    # does not stop an attacker — it stops a neighbourhood. 5 signups an hour was
+    # low enough that ordinary testing locked the form out for a full hour.
+    #
+    # These still bound abuse: 30 login attempts per 5 minutes is nowhere near
+    # enough to brute-force a password of the length the API enforces, and
+    # per-account protection is what actually guards a specific customer.
+    rate_limit_login: str = "30/300"
+    rate_limit_register: str = "20/3600"
     rate_limit_support: str = "3/300"
     rate_limit_default: str = "120/60"
 
