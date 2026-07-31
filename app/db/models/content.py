@@ -95,6 +95,12 @@ class PromoBanner(Base):
     title_uz: Mapped[str] = mapped_column(String(160), default="")
     text_uz: Mapped[str] = mapped_column(Text, default="")
     code: Mapped[str] = mapped_column(String(40), default="WELCOME10")
+    promo_code_id: Mapped[int | None] = mapped_column(
+        ForeignKey("orders_promocode.id"), nullable=True
+    )
+    strip_text: Mapped[str] = mapped_column(String(60), default="")
+    strip_text_ru: Mapped[str] = mapped_column(String(60), default="")
+    strip_text_uz: Mapped[str] = mapped_column(String(60), default="")
     cta_link: Mapped[str] = mapped_column(String(255), default="/destinations")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

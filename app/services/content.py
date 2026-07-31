@@ -25,7 +25,7 @@ async def landing_content(session: AsyncSession, language: str) -> JSONDict:
         testimonials = await repo.approved_testimonials(session)
         devices = await repo.active_devices(session)
         faqs = await repo.active_faqs(session)
-        promo = await repo.current_promo_banner(session)
+        promo, promo_code = await repo.current_promo_banner(session)
 
         payload = LandingContentOut(
             benefits=[
@@ -61,9 +61,16 @@ async def landing_content(session: AsyncSession, language: str) -> JSONDict:
                 PromoOut(
                     eyebrow=localise(promo, "eyebrow", language),
                     title=localise(promo, "title", language),
-                    text=localise(promo, "text", language).replace("{{code}}", promo.code),
-                    code=promo.code,
+                    text=localise(promo, "text", language).replace(
+                        "{{code}}", promo_code.code if promo_code else promo.code
+                    ),
+                    # The linked code wins over the typed one: it is the code
+                    # checkout will actually accept.
+                    code=promo_code.code if promo_code else promo.code,
                     cta_link=promo.cta_link,
+                    strip_text=localise(promo, "strip_text", language),
+                    discount_type=promo_code.discount_type if promo_code else None,
+                    discount_value=promo_code.discount_value if promo_code else None,
                 )
                 if promo
                 else None

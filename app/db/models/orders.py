@@ -19,6 +19,7 @@ class PromoCode(Base):
     code: Mapped[str] = mapped_column(String(40), unique=True)
     discount_type: Mapped[str] = mapped_column(String(10), default="percent")
     discount_value: Mapped[Decimal] = mapped_column(Numeric(8, 2))
+    min_order_usd: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=0)
     max_uses: Mapped[int] = mapped_column(Integer, default=0)
     used_count: Mapped[int] = mapped_column(Integer, default=0)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

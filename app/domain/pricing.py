@@ -38,6 +38,9 @@ class PromoRule:
     used_count: int
     is_active: bool
     valid_until: datetime | None
+    # 0 means no floor. Checked against the subtotal, so a fixed discount cannot
+    # be spent on a cart smaller than the discount itself.
+    min_order_usd: Decimal = ZERO
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,8 +57,18 @@ class PricingError(ValueError):
     """Cart cannot be priced (empty, unavailable plan, absurd quantity)."""
 
 
-def validate_promo(promo: PromoRule | None, *, now: datetime | None = None) -> str | None:
-    """Return a rejection reason, or None when the promo is usable."""
+def validate_promo(
+    promo: PromoRule | None,
+    *,
+    now: datetime | None = None,
+    subtotal: Decimal | None = None,
+) -> str | None:
+    """Return a rejection reason, or None when the promo is usable.
+
+    `subtotal` is optional so callers that only check the code itself still work,
+    but passing it is what enforces the minimum order — without it a $20 code
+    applies to a $1.99 cart and the plan is free.
+    """
     if promo is None:
         return "Promo code is invalid"
     if not promo.is_active:
@@ -69,6 +82,8 @@ def validate_promo(promo: PromoRule | None, *, now: datetime | None = None) -> s
             return "Promo code has expired"
     if promo.max_uses and promo.used_count >= promo.max_uses:
         return "Promo code usage limit reached"
+    if subtotal is not None and promo.min_order_usd > ZERO and subtotal < promo.min_order_usd:
+        return f"This code applies to orders of ${promo.min_order_usd:g} or more"
     return None
 
 
@@ -103,7 +118,8 @@ def build_quote(
     if not promo_requested:
         return Quote(subtotal, ZERO, subtotal, False, None, tuple(lines))
 
-    rejection = validate_promo(promo, now=now)
+    # The subtotal is known by here, so the minimum-order rule can be applied.
+    rejection = validate_promo(promo, now=now, subtotal=subtotal)
     if rejection or promo is None:
         return Quote(subtotal, ZERO, subtotal, False, rejection, tuple(lines))
 

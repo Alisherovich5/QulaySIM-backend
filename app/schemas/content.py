@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import EmailStr, Field
 
-from app.schemas.base import APIModel
+from app.schemas.base import APIModel, Money
 
 
 class BenefitOut(APIModel):
@@ -38,6 +38,13 @@ class PromoOut(APIModel):
     text: str
     code: str
     cta_link: str
+    # Short line for the bar above the navigation, where the full sentence does
+    # not fit. Empty means the storefront uses its own wording.
+    strip_text: str = ""
+    # Read from the promo code that actually applies the discount, so what the
+    # site advertises and what checkout takes off are the same number.
+    discount_type: str | None = None
+    discount_value: Money | None = None
 
 
 class LandingContentOut(APIModel):

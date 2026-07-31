@@ -41,14 +41,31 @@ async def active_faqs(session: AsyncSession) -> list[FAQ]:
     return list(result.scalars().all())
 
 
-async def current_promo_banner(session: AsyncSession) -> PromoBanner | None:
+async def current_promo_banner(session: AsyncSession) -> tuple[PromoBanner | None, object | None]:
+    """The live banner and the promo code it advertises.
+
+    Returned together because the displayed discount comes from the code, not the
+    banner — one number, so an advertised 20% cannot drift from a 10% checkout.
+    The join is left outer: a banner with no code linked still renders, it just
+    has no figure to show.
+    """
+    from app.db.models import PromoCode
+
     result = await session.execute(
-        select(PromoBanner)
+        select(PromoBanner, PromoCode)
+        .outerjoin(PromoCode, PromoBanner.promo_code_id == PromoCode.id)
         .where(PromoBanner.is_active.is_(True))
         .order_by(PromoBanner.updated_at.desc())
         .limit(1)
     )
-    return result.scalars().first()
+    row = result.first()
+    if row is None:
+        return None, None
+    banner, code = row
+    # An expired or disabled code must not be advertised.
+    if code is not None and not code.is_active:
+        code = None
+    return banner, code
 
 
 async def get_customer_testimonial(session: AsyncSession, customer_id: int) -> Testimonial | None:

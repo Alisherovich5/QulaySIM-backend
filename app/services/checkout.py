@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import DomainError
@@ -23,6 +25,7 @@ def _to_rule(promo: PromoCode | None) -> PromoRule | None:
         used_count=promo.used_count,
         is_active=promo.is_active,
         valid_until=promo.valid_until,
+        min_order_usd=promo.min_order_usd or Decimal("0"),
     )
 
 
