@@ -48,6 +48,13 @@ class ConflictError(DomainError):
     code = "conflict"
 
 
+class ValidationError(DomainError):
+    """Input the client can fix. Carries a code so the reason can be translated."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    code = "validation_error"
+
+
 class AuthenticationError(DomainError):
     status_code = status.HTTP_401_UNAUTHORIZED
     code = "unauthenticated"

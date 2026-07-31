@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, File, UploadFile
 
 from app.api.deps import CurrentCustomer, SessionDep
+from app.core.errors import ValidationError
 from app.db.models import ESIM, Order
 from app.repositories import orders as order_repo
 from app.schemas.account import (
@@ -81,3 +84,32 @@ async def submit_testimonial(
         location=payload.location,
         text=payload.text,
     )
+
+@router.post("/avatar", response_model=AccountSummaryOut)
+async def upload_avatar(
+    session: SessionDep,
+    customer: CurrentCustomer,
+    file: Annotated[UploadFile, File(description="JPEG, PNG or WebP, up to 5 MB")],
+) -> JSONDict:
+    """Replace the customer's avatar.
+
+    The declared content type is not consulted — it is trivially forged, and the
+    only thing that establishes an upload is an image is decoding it. Reading is
+    capped so an oversized body cannot be streamed into memory first.
+    """
+    from app.domain.avatars import MAX_UPLOAD_BYTES, AvatarRejected
+
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        await service.set_avatar(session, customer, raw)
+    except AvatarRejected as rejected:
+        # 422 with the rule's code, matching how password rules are reported, so
+        # the storefront can translate the reason rather than show it in English.
+        raise ValidationError(rejected.message, code=rejected.code) from None
+    return await service.summary(session, customer)
+
+
+@router.delete("/avatar", response_model=AccountSummaryOut)
+async def delete_avatar(session: SessionDep, customer: CurrentCustomer) -> JSONDict:
+    await service.clear_avatar(session, customer)
+    return await service.summary(session, customer)

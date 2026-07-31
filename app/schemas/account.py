@@ -24,6 +24,11 @@ class AccountSummaryOut(APIModel):
     countries_connected: int
     total_spent: Money
     orders_count: int
+    # Inline data URI or null. Sent with the summary rather than served from a
+    # URL: there is then no public endpoint to enumerate, and no authenticated
+    # image request for an <img> tag to fail — the access token lives in memory,
+    # so it cannot ride along on one.
+    avatar_url: str | None = None
     passport: list[PassportCountry] = []
 
 

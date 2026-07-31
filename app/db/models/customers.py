@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, utcnow
@@ -18,6 +18,11 @@ class Customer(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Re-encoded WebP written by this service, never the uploaded bytes.
+    avatar_webp: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    avatar_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     referral_code: Mapped[str | None] = mapped_column(String(12), unique=True, nullable=True)
     referred_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers_customer.id"), nullable=True

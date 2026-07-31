@@ -217,3 +217,4 @@ class TestReferralCode:
 
         # Stable across calls — a customer's code must not change.
         assert await service.ensure_referral_code(session, customer) == code
+

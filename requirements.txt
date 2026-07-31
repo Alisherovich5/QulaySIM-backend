@@ -10,3 +10,6 @@ bcrypt>=4.1
 qrcode[pil]>=7.4
 python-multipart>=0.0.9
 python-decouple>=3.8
+# Avatars are re-encoded before storage; decoding is how we prove an upload
+# is really an image rather than trusting its content type.
+Pillow>=10.0

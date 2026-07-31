@@ -532,3 +532,110 @@ class TestPopularPlansFollowPopularDestinations:
         plans = (await client.get("/api/plans/popular?limit=24")).json()
         stray = sorted({p["country_slug"] for p in plans} - promoted)
         assert not stray, f"plans shown for demoted destinations: {stray}"
+
+
+class TestAvatar:
+    """Uploading a profile photo, and what the endpoint refuses.
+
+    The refusals are the point: this is the only place a customer can put a file
+    of their choosing into the system.
+    """
+
+    @staticmethod
+    def _png(size=(600, 400)) -> bytes:
+        import io
+
+        from PIL import Image
+
+        buf = io.BytesIO()
+        Image.new("RGB", size, (40, 140, 120)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    async def _auth(self, client: AsyncClient) -> dict[str, str]:
+        import time
+
+        email = f"avatar-{int(time.time() * 1000)}@example.com"
+        response = await client.post(
+            "/api/auth/register",
+            json={"email": email, "full_name": "Ibodov Tinchibek", "password": "Toshkent2026x"},
+        )
+        assert response.status_code == 201, response.text
+        return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+    async def test_a_new_account_has_no_avatar(self, client: AsyncClient) -> None:
+        headers = await self._auth(client)
+        summary = (await client.get("/api/account/summary", headers=headers)).json()
+        assert summary["avatar_url"] is None
+
+    async def test_uploading_returns_the_avatar_inline(self, client: AsyncClient) -> None:
+        headers = await self._auth(client)
+        response = await client.post(
+            "/api/account/avatar",
+            headers=headers,
+            files={"file": ("me.png", self._png(), "image/png")},
+        )
+        assert response.status_code == 200, response.text
+        # Inline, so an <img> needs no second request and no credential.
+        assert response.json()["avatar_url"].startswith("data:image/webp;base64,")
+
+    async def test_the_stored_image_is_webp_not_the_upload(self, client: AsyncClient) -> None:
+        headers = await self._auth(client)
+        await client.post(
+            "/api/account/avatar",
+            headers=headers,
+            files={"file": ("me.png", self._png(), "image/png")},
+        )
+        summary = (await client.get("/api/account/summary", headers=headers)).json()
+        # A PNG went in; only re-encoded WebP is kept, which is what strips
+        # anything that rode along in the original.
+        assert "image/webp" in summary["avatar_url"]
+
+    async def test_a_declared_content_type_is_not_believed(self, client: AsyncClient) -> None:
+        headers = await self._auth(client)
+        response = await client.post(
+            "/api/account/avatar",
+            headers=headers,
+            files={"file": ("shell.png", b"<?php system($_GET['c']); ?>", "image/png")},
+        )
+        assert response.status_code == 422
+        assert response.json()["code"] == "avatar_not_an_image"
+
+    async def test_an_svg_is_refused(self, client: AsyncClient) -> None:
+        headers = await self._auth(client)
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+        response = await client.post(
+            "/api/account/avatar",
+            headers=headers,
+            files={"file": ("x.svg", svg, "image/svg+xml")},
+        )
+        # Serving this from our own origin would be stored XSS.
+        assert response.status_code == 422
+
+    async def test_deleting_clears_it(self, client: AsyncClient) -> None:
+        headers = await self._auth(client)
+        await client.post(
+            "/api/account/avatar",
+            headers=headers,
+            files={"file": ("me.png", self._png(), "image/png")},
+        )
+        response = await client.delete("/api/account/avatar", headers=headers)
+        assert response.status_code == 200
+        assert response.json()["avatar_url"] is None
+
+    async def test_an_anonymous_caller_cannot_upload(self, client: AsyncClient) -> None:
+        response = await client.post(
+            "/api/account/avatar", files={"file": ("me.png", self._png(), "image/png")}
+        )
+        assert response.status_code == 401
+
+    async def test_one_customer_cannot_change_anothers(self, client: AsyncClient) -> None:
+        first = await self._auth(client)
+        second = await self._auth(client)
+        await client.post(
+            "/api/account/avatar", headers=first,
+            files={"file": ("me.png", self._png(), "image/png")},
+        )
+        # The endpoint takes no id — it always acts on the caller — so the second
+        # account is untouched. This asserts there is no way to address another.
+        other = (await client.get("/api/account/summary", headers=second)).json()
+        assert other["avatar_url"] is None

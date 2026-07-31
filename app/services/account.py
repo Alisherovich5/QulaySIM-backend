@@ -17,6 +17,8 @@ from app.repositories import customers as customer_repo
 from app.repositories import orders as order_repo
 from app.schemas.base import JSONDict
 
+from app.domain import avatars
+
 logger = get_logger(__name__)
 
 MAX_TOPUP_MB = 51200
@@ -36,8 +38,32 @@ async def summary(session: AsyncSession, customer: Customer) -> JSONDict:
         "countries_connected": len(passport),
         "total_spent": rows["total_spent"],
         "orders_count": rows["orders_count"],
+        "avatar_url": avatars.to_data_uri(customer.avatar_webp),
         "passport": passport,
     }
+
+
+async def set_avatar(session: AsyncSession, customer: Customer, raw: bytes) -> None:
+    """Store a re-encoded avatar. Raises AvatarRejected for anything unsuitable.
+
+    Only the re-encoded bytes are kept — never what was uploaded. The rejection
+    carries a code so the storefront can say what was wrong in the customer's own
+    language instead of "upload failed".
+    """
+    from datetime import datetime, timezone
+
+    built = avatars.build(raw)
+    customer.avatar_webp = built.webp
+    customer.avatar_updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    logger.info("account.avatar_set", customer_id=customer.id, bytes=len(built.webp))
+
+
+async def clear_avatar(session: AsyncSession, customer: Customer) -> None:
+    customer.avatar_webp = None
+    customer.avatar_updated_at = None
+    await session.commit()
+    logger.info("account.avatar_cleared", customer_id=customer.id)
 
 
 async def activate_esim(session: AsyncSession, customer: Customer, esim_id: int) -> ESIM:
