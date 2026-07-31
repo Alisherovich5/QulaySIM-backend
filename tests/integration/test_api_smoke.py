@@ -513,3 +513,22 @@ class TestPopularPlans:
         body = (await client.get("/api/plans/popular")).text
         for field in ("cost_usd", "markup_percent", "price_locked", "provider"):
             assert field not in body, f"{field} leaked to the landing page"
+
+
+class TestPopularPlansFollowPopularDestinations:
+    """The two home-page sections must show the same destinations.
+
+    Plan.is_popular and Country.is_popular are separate flags, and a plan left
+    popular in a demoted country put Singapore in the plans row while the
+    destinations grid showed nine other countries.
+    """
+
+    async def test_every_plan_is_in_a_promoted_destination(self, client: AsyncClient) -> None:
+        countries = (await client.get("/api/countries?limit=200")).json()
+        promoted = {c["slug"] for c in countries if c.get("is_popular")}
+        if not promoted:
+            pytest.skip("no destination is marked popular")
+
+        plans = (await client.get("/api/plans/popular?limit=24")).json()
+        stray = sorted({p["country_slug"] for p in plans} - promoted)
+        assert not stray, f"plans shown for demoted destinations: {stray}"

@@ -110,6 +110,12 @@ async def list_popular_plans(session: AsyncSession, *, limit: int) -> list[tuple
                 Plan.is_active.is_(True),
                 Plan.is_popular.is_(True),
                 Country.is_active.is_(True),
+                # The destination must be promoted too, or the landing page
+                # shows one set of countries in its destinations grid and a
+                # different set in its plans row. Requiring both means the two
+                # agree by construction instead of depending on somebody keeping
+                # two flags in step.
+                Country.is_popular.is_(True),
             )
             .order_by(Plan.price_usd, Plan.id)
         )
