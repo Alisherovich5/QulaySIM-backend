@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import ESIM, Country, Order, OrderItem, Plan, PromoCode
+from app.repositories.catalog import localised_country_name
 
 
 async def list_orders(session: AsyncSession, customer_id: int, limit: int = 100) -> list[Order]:
@@ -79,7 +80,9 @@ async def find_by_provider_order_no(session: AsyncSession, order_no: str) -> Ord
     return result.scalars().unique().first()
 
 
-async def account_summary_rows(session: AsyncSession, customer_id: int) -> dict[str, Any]:
+async def account_summary_rows(
+    session: AsyncSession, customer_id: int, *, language: str = "en"
+) -> dict[str, Any]:
     """All account KPIs in three queries instead of a per-metric round trip."""
     esim_stats = await session.execute(
         select(
@@ -99,12 +102,15 @@ async def account_summary_rows(session: AsyncSession, customer_id: int) -> dict[
     )
     orders_count, total_spent = order_stats.one()
 
+    # The same localised name the catalogue serves, or the passport would say
+    # "Turkey" on the page next to a destinations list that says "Turkiya".
+    country_name = localised_country_name(language)
     passport = await session.execute(
-        select(Country.iso2, Country.name, func.count(ESIM.id))
+        select(Country.iso2, country_name, func.count(ESIM.id))
         .join(Plan, Plan.id == ESIM.plan_id)
         .join(Country, Country.id == Plan.country_id)
         .where(ESIM.customer_id == customer_id)
-        .group_by(Country.iso2, Country.name)
+        .group_by(Country.iso2, country_name)
         .order_by(func.count(ESIM.id).desc())
     )
     passport_rows = passport.all()

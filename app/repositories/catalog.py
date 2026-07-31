@@ -10,11 +10,24 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import Subquery, func, or_, select
+from sqlalchemy import ColumnExpressionArgument, Subquery, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import Country, Plan, Region
+
+
+def localised_country_name(language: str) -> ColumnExpressionArgument[str]:
+    """The country name the customer is actually reading.
+
+    Sorting on `Country.name` alone puts Yaponiya under J on the Uzbek page,
+    which reads as an unsorted list. An empty translation falls back to the
+    English base, exactly as the payload does.
+    """
+    column = getattr(Country, f"name_{language}", None)
+    if column is None:
+        return Country.name
+    return func.coalesce(func.nullif(column, ""), Country.name)
 
 
 def _cheapest_price_subquery() -> Subquery:
@@ -34,6 +47,7 @@ async def list_regions(session: AsyncSession) -> list[Region]:
 async def list_countries(
     session: AsyncSession,
     *,
+    language: str = "en",
     search: str | None = None,
     region_slug: str | None = None,
     popular: bool | None = None,
@@ -49,13 +63,23 @@ async def list_countries(
     )
     if search:
         like = f"%{search.strip()}%"
-        stmt = stmt.where(or_(Country.name.ilike(like), Country.iso2.ilike(like)))
+        # Every language's name, not just the page's: somebody browsing in
+        # Russian may still type "Turkey", and a search that only matched the
+        # active language would tell them the destination does not exist.
+        stmt = stmt.where(
+            or_(
+                Country.name.ilike(like),
+                Country.name_ru.ilike(like),
+                Country.name_uz.ilike(like),
+                Country.iso2.ilike(like),
+            )
+        )
     if popular is not None:
         stmt = stmt.where(Country.is_popular.is_(popular))
     if region_slug:
         stmt = stmt.join(Region, Region.id == Country.region_id).where(Region.slug == region_slug)
 
-    stmt = stmt.order_by(Country.sort_order, Country.name).limit(limit).offset(offset)
+    stmt = stmt.order_by(Country.sort_order, localised_country_name(language)).limit(limit).offset(offset)
     result = await session.execute(stmt)
     return [(row[0], row[1]) for row in result.all()]
 

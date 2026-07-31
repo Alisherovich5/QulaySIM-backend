@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
 
-from app.api.deps import CurrentCustomer, SessionDep
+from app.api.deps import CurrentCustomer, SessionDep, language_from
 from app.core.errors import ValidationError
 from app.db.models import ESIM, Order
 from app.repositories import orders as order_repo
@@ -23,8 +23,12 @@ router = APIRouter(prefix="/api/account", tags=["account"])
 
 
 @router.get("/summary", response_model=AccountSummaryOut)
-async def summary(session: SessionDep, customer: CurrentCustomer) -> JSONDict:
-    return await service.summary(session, customer)
+async def summary(
+    session: SessionDep,
+    customer: CurrentCustomer,
+    language: Annotated[str, Depends(language_from)],
+) -> JSONDict:
+    return await service.summary(session, customer, language=language)
 
 
 @router.get("/esims", response_model=list[ESIMOut])

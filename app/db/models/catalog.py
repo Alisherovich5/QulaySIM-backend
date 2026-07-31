@@ -14,6 +14,8 @@ class Region(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(80))
+    name_ru: Mapped[str] = mapped_column(String(80), default="")
+    name_uz: Mapped[str] = mapped_column(String(80), default="")
     slug: Mapped[str] = mapped_column(String(80))
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
@@ -25,6 +27,8 @@ class Country(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
+    name_ru: Mapped[str] = mapped_column(String(120), default="")
+    name_uz: Mapped[str] = mapped_column(String(120), default="")
     slug: Mapped[str] = mapped_column(String(120))
     iso2: Mapped[str] = mapped_column(String(2))
     region_id: Mapped[int | None] = mapped_column(ForeignKey("catalog_region.id"))

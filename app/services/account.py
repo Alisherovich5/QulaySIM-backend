@@ -24,8 +24,10 @@ logger = get_logger(__name__)
 MAX_TOPUP_MB = 51200
 
 
-async def summary(session: AsyncSession, customer: Customer) -> JSONDict:
-    rows = await order_repo.account_summary_rows(session, customer.id)
+async def summary(
+    session: AsyncSession, customer: Customer, *, language: str = "en"
+) -> JSONDict:
+    rows = await order_repo.account_summary_rows(session, customer.id, language=language)
     passport = rows["passport"]
     return {
         "full_name": customer.full_name,

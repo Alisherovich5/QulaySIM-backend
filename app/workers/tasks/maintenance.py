@@ -64,17 +64,30 @@ def refresh_currency_rate() -> float:
 def warm_catalog_cache() -> int:
     from app.core.cache import close_redis
     from app.db.session import SessionFactory, dispose_engine
+    from app.domain.localisation import SUPPORTED_LANGUAGES
     from app.services.catalog import invalidate_catalog, list_countries, list_regions
 
     async def run() -> int:
         try:
             await invalidate_catalog()
+            total = 0
             async with SessionFactory() as session:
-                await list_regions(session)
-                countries = await list_countries(
-                    session, search=None, region_slug=None, popular=None, limit=500, offset=0
-                )
-            return len(countries)
+                # Every supported language: the catalogue is cached per language
+                # now, so warming only English left uz and ru visitors paying the
+                # cold query after each invalidation.
+                for language in SUPPORTED_LANGUAGES:
+                    await list_regions(session, language=language)
+                    countries = await list_countries(
+                        session,
+                        search=None,
+                        region_slug=None,
+                        popular=None,
+                        limit=500,
+                        offset=0,
+                        language=language,
+                    )
+                    total += len(countries)
+            return total
         finally:
             await close_redis()
             await dispose_engine()

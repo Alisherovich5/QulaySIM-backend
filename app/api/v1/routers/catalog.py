@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import SessionDep
+from app.api.deps import SessionDep, language_from
 from app.schemas.base import JSONDict, JSONList
 from app.services import catalog as service
 
@@ -12,13 +12,17 @@ router = APIRouter(prefix="/api", tags=["catalog"])
 
 
 @router.get("/regions")
-async def list_regions(session: SessionDep) -> JSONList:
-    return await service.list_regions(session)
+async def list_regions(
+    session: SessionDep,
+    language: Annotated[str, Depends(language_from)],
+) -> JSONList:
+    return await service.list_regions(session, language)
 
 
 @router.get("/countries")
 async def list_countries(
     session: SessionDep,
+    language: Annotated[str, Depends(language_from)],
     search: Annotated[str | None, Query(max_length=80)] = None,
     region: Annotated[str | None, Query(max_length=80, description="region slug")] = None,
     popular: bool | None = None,
@@ -27,6 +31,7 @@ async def list_countries(
 ) -> JSONList:
     return await service.list_countries(
         session,
+        language=language,
         search=search,
         region_slug=region,
         popular=popular,
@@ -36,14 +41,19 @@ async def list_countries(
 
 
 @router.get("/countries/{slug}")
-async def country_detail(slug: str, session: SessionDep) -> JSONDict:
-    return await service.get_country(session, slug)
+async def country_detail(
+    slug: str,
+    session: SessionDep,
+    language: Annotated[str, Depends(language_from)],
+) -> JSONDict:
+    return await service.get_country(session, slug, language)
 
 
 @router.get("/plans/popular")
 async def popular_plans(
     session: SessionDep,
+    language: Annotated[str, Depends(language_from)],
     limit: Annotated[int, Query(ge=1, le=24)] = 6,
 ) -> JSONList:
     """Plans marked popular in the admin, for the landing page."""
-    return await service.list_popular_plans(session, limit=limit)
+    return await service.list_popular_plans(session, language=language, limit=limit)

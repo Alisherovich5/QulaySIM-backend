@@ -206,6 +206,40 @@ class TestSummary:
         assert result["data_used_mb"] == 512
         assert result["email"] == customer.email
 
+    async def test_passport_names_follow_the_language(self, session) -> None:
+        """The passport used to select Country.name directly, so the account page
+        said "Turkey" while the destinations list on the same site said
+        "Turkiya"."""
+        from sqlalchemy import select
+
+        from app.db.models import Country, Plan
+
+        customer = await _make_customer(session)
+        esim = await _make_esim(session, customer, status=ESIMStatus.ACTIVE)
+        plan = (await session.execute(select(Plan).where(Plan.id == esim.plan_id))).scalar_one()
+        country = (
+            await session.execute(select(Country).where(Country.id == plan.country_id))
+        ).scalar_one()
+        english = country.name
+        original = (country.name_uz, country.name_ru)
+        country.name_uz = "Sinov mamlakati"
+        # Cleared on purpose: an untranslated country must fall back to the base
+        # name, not to blank.
+        country.name_ru = ""
+        # Flushed, not committed: this suite runs against the development
+        # database, so a committed rename would outlive the test and show up in
+        # the admin and on the site.
+        await session.flush()
+        try:
+            uzbek = await service.summary(session, customer, language="uz")
+            assert uzbek["passport"][0]["name"] == "Sinov mamlakati"
+
+            russian = await service.summary(session, customer, language="ru")
+            assert russian["passport"][0]["name"] == english
+        finally:
+            country.name_uz, country.name_ru = original
+            await session.flush()
+
 
 class TestReferralCode:
     async def test_code_is_allocated_lazily(self, session) -> None:
