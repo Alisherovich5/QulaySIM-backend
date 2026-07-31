@@ -21,11 +21,23 @@ class RegisterIn(APIModel):
 
     @model_validator(mode="after")
     def _password_is_strong(self) -> RegisterIn:
-        from app.domain.passwords import rejection_reason
+        from pydantic_core import PydanticCustomError
 
-        reason = rejection_reason(self.password, email=str(self.email), full_name=self.full_name)
-        if reason:
-            raise ValueError(reason)
+        from app.domain.passwords import rejection
+
+        result = rejection(self.password, email=str(self.email), full_name=self.full_name)
+        if result:
+            # PydanticCustomError rather than ValueError so the rule's code lands
+            # in the error's `type`. A plain ValueError carries only English
+            # prose, which leaves the storefront choosing between showing that
+            # untranslated or saying nothing useful — and saying nothing useful
+            # is what made this form look broken to anyone who typed a weak
+            # password.
+            raise PydanticCustomError(
+                result.code,
+                result.message,
+                {"limit": result.limit} if result.limit is not None else {},
+            )
         return self
 
 
