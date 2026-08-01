@@ -29,11 +29,44 @@ def parse_rule(rule: str) -> tuple[int, int]:
     return int(limit), int(window)
 
 
+# One hop in front of the app: nginx in the storefront image, which proxies to
+# us with `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`. If Caddy
+# or another proxy is ever inserted between them, raise this to match, or every
+# limit below starts keying on an address the caller picked.
+_TRUSTED_PROXY_HOPS = 1
+
+
 def client_ip(request: Request) -> str:
+    """The address the rate limits are counted against.
+
+    Read from the RIGHT of X-Forwarded-For, not the left. nginx *appends* the
+    real peer to whatever the caller sent, so the left-most entry is whatever
+    the caller typed — taking it let anyone rotate a header and get an unlimited
+    number of fresh buckets, which is the whole limit gone. The right-most
+    entries are the ones our own proxies wrote, and only those can be trusted.
+    """
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
-        return forwarded.split(",", 1)[0].strip()
+        hops = [part.strip() for part in forwarded.split(",") if part.strip()]
+        if hops:
+            # The last hop is the peer nginx saw. With more proxies in front,
+            # step back one per trusted hop.
+            index = max(0, len(hops) - _TRUSTED_PROXY_HOPS)
+            candidate = hops[index] if index < len(hops) else hops[-1]
+            # Never let a caller's text become a Redis key or a log field.
+            if _is_ip(candidate):
+                return candidate
     return request.client.host if request.client else "unknown"
+
+
+def _is_ip(value: str) -> bool:
+    from ipaddress import ip_address
+
+    try:
+        ip_address(value)
+    except ValueError:
+        return False
+    return True
 
 
 async def enforce(bucket: str, identity: str, rule: str) -> None:
@@ -53,6 +86,8 @@ async def enforce(bucket: str, identity: str, rule: str) -> None:
         return
 
     if current > limit:
+        # `identity` is an address or an e-mail the caller supplied; both are
+        # bounded and validated upstream, so neither can smuggle a log line.
         logger.info("ratelimit.blocked", bucket=bucket, identity=identity, count=current)
         raise RateLimitedError(
             "Too many requests. Please wait and try again.",

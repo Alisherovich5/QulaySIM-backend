@@ -12,7 +12,12 @@ from __future__ import annotations
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AuthenticationError, ConflictError, DomainError
+from app.core.errors import (
+    AuthenticationError,
+    ConflictError,
+    DomainError,
+    ServiceUnavailableError,
+)
 from app.core.logging import get_logger
 from app.core.security import (
     create_access_token,
@@ -129,75 +134,112 @@ async def login_with_google(session: AsyncSession, *, credential: str) -> Custom
     3. **Neither** — create a passwordless customer. `hashed_password` stays
        empty and `verify_password` refuses an empty hash, so the account cannot
        later be entered with a guessed password.
+
+    Case 2 is the one worth stating plainly: an address that already registered
+    with a password is *linked*, not rejected and not duplicated. The fourth
+    outcome is a conflict — the customer already holds a different Google link —
+    which is refused rather than retried; see the bottom of the loop.
     """
     from datetime import datetime, timezone
 
     from sqlalchemy import select
 
     from app.db.models import SocialAccount
-    from app.integrations.google_auth import GoogleAuthError, verify_id_token
+    from app.integrations.google_auth import (
+        GoogleAuthError,
+        GoogleUnavailableError,
+        verify_id_token,
+    )
 
     try:
-        identity = verify_id_token(credential)
+        identity = await verify_id_token(credential)
+    except GoogleUnavailableError as exc:
+        # Google being unreachable is not the customer's fault and must not be
+        # reported as a bad account: 401 would tell them to fix something they
+        # cannot, and would bury the outage in the ordinary login-failure rate.
+        logger.warning("auth.google_unavailable", error=str(exc))
+        raise ServiceUnavailableError(
+            "Google sign-in is temporarily unavailable, please try again"
+        ) from None
     except GoogleAuthError as exc:
         logger.info("auth.google_rejected", error=str(exc))
         raise AuthenticationError("Could not verify this Google account") from None
 
-    link = (
-        await session.execute(
-            select(SocialAccount).where(
-                SocialAccount.provider == "google",
-                SocialAccount.provider_uid == identity.subject,
+    # Two passes at most. The first can lose a race with another tab signing the
+    # same person in for the first time; the second then resolves through case 1
+    # above. This used to recurse instead, which was fine for a race but never
+    # terminated for a conflict that is not one — see the second-attempt branch.
+    for attempt in (1, 2):
+        link = (
+            await session.execute(
+                select(SocialAccount).where(
+                    SocialAccount.provider == "google",
+                    SocialAccount.provider_uid == identity.subject,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if link is not None:
+            customer = await session.get(Customer, link.customer_id)
+            if customer is None:  # pragma: no cover - FK makes this unreachable
+                raise AuthenticationError("Account not found")
+            if not customer.is_active:
+                raise AuthenticationError("Account disabled")
+            link.last_login_at = datetime.now(timezone.utc)
+            link.email = identity.email
+            await session.commit()
+            logger.info("auth.google_login", customer_id=customer.id, linked=True)
+            return customer
+
+        customer = await customer_repo.get_by_email(session, identity.email)
+        created = customer is None
+        if customer is None:
+            customer = Customer(
+                email=identity.email,
+                full_name=identity.full_name,
+                hashed_password="",
+                referral_code=await _unique_referral_code(session),
+            )
+            session.add(customer)
+            await session.flush()
+        elif not customer.is_active:
+            raise AuthenticationError("Account disabled")
+
+        session.add(
+            SocialAccount(
+                customer_id=customer.id,
+                provider="google",
+                provider_uid=identity.subject,
+                email=identity.email,
+                last_login_at=datetime.now(timezone.utc),
             )
         )
-    ).scalar_one_or_none()
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            if attempt == 1:
+                continue
+            # Not a race, then. The standing case is Django's
+            # `one_link_per_customer_per_provider`: this customer already holds
+            # a Google link with a different `sub`, which happens when a Google
+            # account is deleted and recreated on the same address. Retrying
+            # can never clear that, so say so once instead of looping.
+            logger.warning(
+                "auth.google_link_conflict",
+                email_hint=identity.email[:2],
+                error=str(exc.orig),
+            )
+            raise ConflictError(
+                "This e-mail is already linked to a different Google account"
+            ) from None
 
-    if link is not None:
-        customer = await session.get(Customer, link.customer_id)
-        if customer is None:  # pragma: no cover - FK makes this unreachable
-            raise AuthenticationError("Account not found")
-        if not customer.is_active:
-            raise AuthenticationError("Account disabled")
-        link.last_login_at = datetime.now(timezone.utc)
-        link.email = identity.email
-        await session.commit()
-        logger.info("auth.google_login", customer_id=customer.id, linked=True)
+        await session.refresh(customer)
+        logger.info("auth.google_login", customer_id=customer.id, created=created)
         return customer
 
-    customer = await customer_repo.get_by_email(session, identity.email)
-    created = customer is None
-    if customer is None:
-        customer = Customer(
-            email=identity.email,
-            full_name=identity.full_name,
-            hashed_password="",
-            referral_code=await _unique_referral_code(session),
-        )
-        session.add(customer)
-        await session.flush()
-    elif not customer.is_active:
-        raise AuthenticationError("Account disabled")
-
-    session.add(
-        SocialAccount(
-            customer_id=customer.id,
-            provider="google",
-            provider_uid=identity.subject,
-            email=identity.email,
-            last_login_at=datetime.now(timezone.utc),
-        )
-    )
-    try:
-        await session.commit()
-    except IntegrityError:
-        # Two tabs racing the same first sign-in. The link now exists, so the
-        # retry resolves through case 1 rather than failing the customer.
-        await session.rollback()
-        return await login_with_google(session, credential=credential)
-
-    await session.refresh(customer)
-    logger.info("auth.google_login", customer_id=customer.id, created=created)
-    return customer
+    # Unreachable: both passes either return or raise. Here for the type checker.
+    raise ConflictError("Could not complete Google sign-in")
 
 
 def issue_tokens(customer: Customer) -> tuple[str, str, int]:

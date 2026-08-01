@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import EmailStr, Field, field_validator, model_validator
 
@@ -83,3 +84,31 @@ class ProvidersOut(APIModel):
     """Which social buttons to render, and with what public client id."""
 
     google_client_id: str = ""
+
+
+# The complete set of reasons the storefront may report when Google sign-in
+# dies in the browser. A fixed allow-list rather than free text: the value ends
+# up in a log line written by an unauthenticated caller, and a caller must
+# never be able to choose what that line says. Anything not listed here is a
+# 422 and never reaches the log.
+GoogleFailureReason = Literal[
+    # The GSI script itself never loaded — CSP, an extension, or the network.
+    "script_blocked",
+    # The script loaded but no usable button ever appeared. This is what a
+    # rejected origin looks like from the page: GSI logs to the console and
+    # calls nothing back.
+    "button_not_rendered",
+    # GSI's own error_callback types.
+    "popup_failed_to_open",
+    "popup_closed",
+    # The credential callback fired with nothing in it.
+    "credential_missing",
+    # error_callback fired with a type we do not recognise.
+    "unknown",
+]
+
+
+class GoogleFailureIn(APIModel):
+    """A report that Google sign-in failed before any credential existed."""
+
+    reason: GoogleFailureReason

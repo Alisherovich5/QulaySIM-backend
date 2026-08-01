@@ -15,10 +15,12 @@ from app.core.cookies import (
     set_session_hint,
 )
 from app.core.errors import AuthenticationError
+from app.core.logging import get_logger
 from app.core.ratelimit import RateLimit, client_ip, enforce
 from app.db.models import Customer
 from app.schemas.auth import (
     CustomerOut,
+    GoogleFailureIn,
     GoogleIn,
     ProvidersOut,
     RefreshIn,
@@ -28,6 +30,8 @@ from app.schemas.auth import (
 from app.services import auth as auth_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+logger = get_logger(__name__)
 
 
 def _issue(response: Response, customer: Customer) -> TokenOut:
@@ -119,6 +123,31 @@ async def google(payload: GoogleIn, session: SessionDep, response: Response) -> 
     """
     customer = await auth_service.login_with_google(session, credential=payload.credential)
     return _issue(response, customer)
+
+
+@router.post(
+    "/google/failed",
+    status_code=status.HTTP_204_NO_CONTENT,
+    # The same ceiling as the sign-in it reports on: a diagnostic must not be
+    # cheaper to call than the thing it diagnoses.
+    dependencies=[Depends(RateLimit("google_failed", settings.rate_limit_login))],
+)
+async def google_failed(payload: GoogleFailureIn) -> None:
+    """Record that the Google button never produced a credential.
+
+    When Google Identity Services refuses — a rejected origin, a blocked
+    script, a popup that never opens — it writes to the browser console and
+    calls nothing back, so /google is never reached and the API sees a silent
+    nothing. The only report the operator gets today is a customer saying the
+    button does not work. This exists purely to put one line in the log.
+
+    Nothing is stored and nothing is returned. The reason comes from a fixed
+    allow-list (GoogleFailureReason), so no caller-chosen text can reach the
+    log, and no identifier of the person is recorded: the line answers "which
+    failure", never "who". That means it is evidence that a failure happened
+    and of what kind — not proof of who hit it, which is all it needs to be.
+    """
+    logger.warning("auth.google_client_failed", reason=payload.reason)
 
 
 @router.get("/providers", response_model=ProvidersOut)
