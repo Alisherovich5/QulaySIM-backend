@@ -429,6 +429,60 @@ class TestSitemapAndRobots:
         for path in ("/destinations", "/device-check", "/support"):
             assert f"<loc>https://qulaysim.uz{path}</loc>" in body, path
 
+    async def test_every_page_is_listed_in_all_three_languages(
+        self, client: AsyncClient
+    ) -> None:
+        """Uzbek at the root, Russian and English under a prefix.
+
+        A language edition that is not in the sitemap is one Google has to
+        discover by following links, which for a Russian page nobody links to
+        from outside means never.
+        """
+        body = (await client.get("/sitemap.xml")).text
+        for path in ("/destinations", "/support"):
+            assert f"<loc>https://qulaysim.uz{path}</loc>" in body, f"uz {path}"
+            assert f"<loc>https://qulaysim.uz/ru{path}</loc>" in body, f"ru {path}"
+            assert f"<loc>https://qulaysim.uz/en{path}</loc>" in body, f"en {path}"
+
+    async def test_the_home_page_keeps_its_trailing_slash(
+        self, client: AsyncClient
+    ) -> None:
+        """It has to match the canonical the front end renders, byte for byte.
+
+        src/lib/seo.ts advertises "https://qulaysim.uz/". A sitemap that says
+        "https://qulaysim.uz" is offering a second spelling of the front page,
+        and the two then compete.
+        """
+        body = (await client.get("/sitemap.xml")).text
+        assert "<loc>https://qulaysim.uz/</loc>" in body
+        assert "<loc>https://qulaysim.uz</loc>" not in body
+
+    async def test_hreflang_sets_are_reciprocal(self, client: AsyncClient) -> None:
+        """Every <url> names all three languages *and itself*.
+
+        Google treats an hreflang group as a claim each member has to confirm.
+        An edition missing from its own alternate list — the easy mistake, since
+        it feels redundant — invalidates the entire group, and all of them lose
+        the benefit rather than just the one.
+        """
+        import re
+
+        body = (await client.get("/sitemap.xml")).text
+        entries = re.findall(r"<url>(.*?)</url>", body, re.S)
+        assert entries, "sitemap has no entries at all"
+
+        for entry in entries:
+            loc = re.search(r"<loc>([^<]+)</loc>", entry)
+            assert loc is not None
+            alternates = dict(
+                re.findall(r'hreflang="([\w-]+)" href="([^"]+)"', entry)
+            )
+            assert set(alternates) == {"uz", "ru", "en", "x-default"}, loc.group(1)
+            assert loc.group(1) in alternates.values(), (
+                f"{loc.group(1)} is absent from its own alternate set"
+            )
+            assert alternates["x-default"] == alternates["uz"], loc.group(1)
+
     async def test_sitemap_lists_active_destinations(self, client: AsyncClient) -> None:
         from sqlalchemy import select
 
@@ -451,9 +505,9 @@ class TestSitemapAndRobots:
     async def test_inactive_destinations_are_not_listed(self, client: AsyncClient) -> None:
         from sqlalchemy import select
 
+        from app.core.cache import invalidate
         from app.db.models import Country
         from app.db.session import SessionFactory
-        from app.core.cache import invalidate
 
         async with SessionFactory() as session:
             country = (

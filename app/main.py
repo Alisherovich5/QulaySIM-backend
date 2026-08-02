@@ -94,6 +94,60 @@ def create_app() -> FastAPI:
     return app
 
 
+SITEMAP_STATIC_PATHS = (
+    ("/", "1.0", "daily"),
+    ("/destinations", "0.9", "daily"),
+    ("/device-check", "0.7", "monthly"),
+    ("/support", "0.6", "monthly"),
+)
+
+# Uzbek is served from the root; the other two live under a path prefix.
+# This must agree with src/lib/seo.ts on the front end — the sitemap and the
+# hreflang tags on the pages themselves have to describe the same set of
+# URLs, or Google discards the whole group as inconsistent.
+SITEMAP_DEFAULT_LANG = "uz"
+SITEMAP_LANGS = ("uz", "ru", "en")
+
+
+def _localised_url(base: str, path: str, lang: str) -> str:
+    """The address of one page in one language, canonical form."""
+    prefix = "" if lang == SITEMAP_DEFAULT_LANG else f"/{lang}"
+    if path == "/":
+        return f"{base}{prefix}" if prefix else f"{base}/"
+    return f"{base}{prefix}{path}"
+
+
+def _sitemap_entries(
+    base: str, path: str, priority: str, freq: str, lastmod: str | None = None
+) -> list[str]:
+    """One <url> per language, each listing every language including itself.
+
+    Reciprocity is not optional: an edition that does not name itself among
+    its own alternates makes the set invalid and Google drops all of it. So
+    the same block of xhtml:link elements is repeated under each <loc>.
+    """
+    alternates = [
+        f'<xhtml:link rel="alternate" hreflang="{lang}" '
+        f'href="{_localised_url(base, path, lang)}"/>'
+        for lang in SITEMAP_LANGS
+    ]
+    alternates.append(
+        '<xhtml:link rel="alternate" hreflang="x-default" '
+        f'href="{_localised_url(base, path, SITEMAP_DEFAULT_LANG)}"/>'
+    )
+    joined = "".join(alternates)
+    # lastmod tells a crawler which of two hundred pages is worth re-reading.
+    # Omitted rather than guessed when we do not know: an invented date is worse
+    # than none, because Google stops trusting the field across the whole site.
+    stamp = f"<lastmod>{lastmod}</lastmod>" if lastmod else ""
+    return [
+        f"  <url><loc>{_localised_url(base, path, lang)}</loc>{stamp}"
+        f"<changefreq>{freq}</changefreq><priority>{priority}</priority>"
+        f"{joined}</url>"
+        for lang in SITEMAP_LANGS
+    ]
+
+
 def _register_sitemap(app: FastAPI) -> None:
     """Serve /sitemap.xml from the API rather than shipping a static file.
 
@@ -109,41 +163,46 @@ def _register_sitemap(app: FastAPI) -> None:
     from app.core.cache import cache_key, get_or_set
     from app.db.session import SessionFactory
 
-    STATIC_PATHS = (
-        ("/", "1.0", "daily"),
-        ("/destinations", "0.9", "daily"),
-        ("/device-check", "0.7", "monthly"),
-        ("/support", "0.6", "monthly"),
-    )
-
     @app.get("/sitemap.xml", include_in_schema=False)
     async def sitemap() -> Response:
         async def produce() -> str:
-            from sqlalchemy import select
+            from sqlalchemy import func, select
 
             from app.core.config import settings as cfg
-            from app.db.models import Country
+            from app.db.models import Country, Plan, SupplierOffer
 
             base = (cfg.public_base_url or "https://qulaysim.uz").rstrip("/")
-            lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-                     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
-            for path, priority, freq in STATIC_PATHS:
-                lines.append(
-                    f"  <url><loc>{base}{path}</loc>"
-                    f"<changefreq>{freq}</changefreq><priority>{priority}</priority></url>"
-                )
+            lines = [
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"'
+                ' xmlns:xhtml="http://www.w3.org/1999/xhtml">',
+            ]
+            for path, priority, freq in SITEMAP_STATIC_PATHS:
+                lines.extend(_sitemap_entries(base, path, priority, freq))
+            # A destination page changes when its offers do — that is where the
+            # prices on it come from — so the newest supplier-offer timestamp for
+            # the country is its real last-modified date. Country itself carries
+            # no timestamp to use.
             async with SessionFactory() as session:
-                slugs = (
+                rows = (
                     await session.execute(
-                        select(Country.slug)
+                        select(Country.slug, func.max(SupplierOffer.updated_at))
+                        .outerjoin(Plan, Plan.country_id == Country.id)
+                        .outerjoin(SupplierOffer, SupplierOffer.plan_id == Plan.id)
                         .where(Country.is_active.is_(True))
+                        .group_by(Country.slug)
                         .order_by(Country.slug)
                     )
-                ).scalars().all()
-            for slug in slugs:
-                lines.append(
-                    f"  <url><loc>{base}/destinations/{slug}</loc>"
-                    f"<changefreq>weekly</changefreq><priority>0.8</priority></url>"
+                ).all()
+            for slug, updated in rows:
+                lines.extend(
+                    _sitemap_entries(
+                        base,
+                        f"/destinations/{slug}",
+                        "0.8",
+                        "weekly",
+                        updated.date().isoformat() if updated else None,
+                    )
                 )
             lines.append("</urlset>")
             return "\n".join(lines)
