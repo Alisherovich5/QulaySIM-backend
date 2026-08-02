@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import FAQ, Benefit, Device, PromoBanner, Testimonial
+from app.db.models import FAQ, Benefit, Device, PromoBanner, PromoCode, Testimonial
 
 
 async def active_benefits(session: AsyncSession) -> list[Benefit]:
@@ -41,7 +41,9 @@ async def active_faqs(session: AsyncSession) -> list[FAQ]:
     return list(result.scalars().all())
 
 
-async def current_promo_banner(session: AsyncSession) -> tuple[PromoBanner | None, object | None]:
+async def current_promo_banner(
+    session: AsyncSession,
+) -> tuple[PromoBanner | None, PromoCode | None]:
     """The live banner and the promo code it advertises.
 
     Returned together because the displayed discount comes from the code, not the
@@ -49,8 +51,6 @@ async def current_promo_banner(session: AsyncSession) -> tuple[PromoBanner | Non
     The join is left outer: a banner with no code linked still renders, it just
     has no figure to show.
     """
-    from app.db.models import PromoCode
-
     result = await session.execute(
         select(PromoBanner, PromoCode)
         .outerjoin(PromoCode, PromoBanner.promo_code_id == PromoCode.id)

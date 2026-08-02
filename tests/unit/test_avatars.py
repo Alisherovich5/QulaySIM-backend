@@ -53,7 +53,7 @@ class TestAccepted:
 
 class TestRefused:
     def _refuses(self, raw, code):
-        with pytest.raises(avatars.AvatarRejected) as caught:
+        with pytest.raises(avatars.AvatarRejectedError) as caught:
             avatars.build(raw)
         assert caught.value.code == code
 

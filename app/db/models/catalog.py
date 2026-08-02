@@ -73,12 +73,12 @@ class Plan(Base):
 
     country: Mapped[Country | None] = relationship(back_populates="plans")
     region: Mapped[Region | None] = relationship()
-    offers: Mapped[list["SupplierOffer"]] = relationship(
+    offers: Mapped[list[SupplierOffer]] = relationship(
         back_populates="plan", order_by="SupplierOffer.cost_usd"
     )
 
     @property
-    def fallback_offers(self) -> list["SupplierOffer"]:
+    def fallback_offers(self) -> list[SupplierOffer]:
         """Usable offers other than the one this plan is currently routed to.
 
         Cheapest first. Fulfilment walks this when the primary supplier

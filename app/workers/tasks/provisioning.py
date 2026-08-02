@@ -6,12 +6,17 @@ worker retry instead of a blocked API worker.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from celery import Task
 
 from app.core.logging import get_logger
 from app.db.models import Order
 from app.workers.celery_app import celery_app
 from app.workers.session import worker_session
+
+if TYPE_CHECKING:
+    from app.integrations.suppliers import Supplier
 
 logger = get_logger(__name__)
 
@@ -280,7 +285,7 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
         return False
 
 
-def get_supplier_or_none(provider: str):
+def get_supplier_or_none(provider: str) -> Supplier | None:
     """Thin indirection so tests can register a stub supplier."""
     from app.integrations.suppliers import get_supplier
 

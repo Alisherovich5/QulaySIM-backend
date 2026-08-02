@@ -9,6 +9,8 @@ Fixes carried over from the previous version:
 
 from __future__ import annotations
 
+from datetime import UTC
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -140,7 +142,7 @@ async def login_with_google(session: AsyncSession, *, credential: str) -> Custom
     outcome is a conflict — the customer already holds a different Google link —
     which is refused rather than retried; see the bottom of the loop.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from sqlalchemy import select
 
@@ -185,7 +187,7 @@ async def login_with_google(session: AsyncSession, *, credential: str) -> Custom
                 raise AuthenticationError("Account not found")
             if not customer.is_active:
                 raise AuthenticationError("Account disabled")
-            link.last_login_at = datetime.now(timezone.utc)
+            link.last_login_at = datetime.now(UTC)
             link.email = identity.email
             await session.commit()
             logger.info("auth.google_login", customer_id=customer.id, linked=True)
@@ -211,7 +213,7 @@ async def login_with_google(session: AsyncSession, *, credential: str) -> Custom
                 provider="google",
                 provider_uid=identity.subject,
                 email=identity.email,
-                last_login_at=datetime.now(timezone.utc),
+                last_login_at=datetime.now(UTC),
             )
         )
         try:

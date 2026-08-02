@@ -134,16 +134,16 @@ class TestMinimumOrder:
 
         from app.domain.pricing import PromoRule
 
-        defaults = dict(
-            code="SAVE20",
-            discount_type="fixed",
-            discount_value=Decimal("20"),
-            max_uses=0,
-            used_count=0,
-            is_active=True,
-            valid_until=None,
-            min_order_usd=Decimal("25"),
-        )
+        defaults = {
+            "code": "SAVE20",
+            "discount_type": "fixed",
+            "discount_value": Decimal("20"),
+            "max_uses": 0,
+            "used_count": 0,
+            "is_active": True,
+            "valid_until": None,
+            "min_order_usd": Decimal("25"),
+        }
         defaults.update(kwargs)
         return PromoRule(**defaults)
 

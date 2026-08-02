@@ -41,7 +41,7 @@ WEBP_QUALITY = 82
 ALLOWED_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "GIF", "BMP", "HEIF", "HEIC"})
 
 
-class AvatarRejected(ValueError):
+class AvatarRejectedError(ValueError):
     """The upload is not something we will store. The message is user-facing."""
 
     def __init__(self, code: str, message: str) -> None:
@@ -58,13 +58,13 @@ class Avatar:
 
 
 def build(raw: bytes) -> Avatar:
-    """Validate, crop and re-encode an uploaded image. Raises AvatarRejected."""
+    """Validate, crop and re-encode an uploaded image. Raises AvatarRejectedError."""
     from PIL import Image, ImageOps, UnidentifiedImageError
 
     if not raw:
-        raise AvatarRejected("avatar_empty", "The file is empty.")
+        raise AvatarRejectedError("avatar_empty", "The file is empty.")
     if len(raw) > MAX_UPLOAD_BYTES:
-        raise AvatarRejected(
+        raise AvatarRejectedError(
             "avatar_too_large",
             f"That image is larger than {MAX_UPLOAD_BYTES // 1024 // 1024} MB.",
         )
@@ -72,19 +72,23 @@ def build(raw: bytes) -> Avatar:
     try:
         probe = Image.open(io.BytesIO(raw))
     except UnidentifiedImageError:
-        raise AvatarRejected(
+        raise AvatarRejectedError(
             "avatar_not_an_image", "That file is not an image we can read."
         ) from None
-    except Exception:
-        # Pillow raises a variety of parser errors on malformed input; none of
-        # them should reach the caller as a 500.
-        raise AvatarRejected(
+    except Exception:  # noqa: BLE001 — see below
+        # Deliberately blind. Pillow raises whatever its individual format
+        # parsers happen to raise on malformed input — the set is undocumented
+        # and grows between releases — and this function's whole job is to make
+        # sure a hostile or simply broken upload becomes a 400 rather than a
+        # 500. Narrowing this to a list of exception types would mean the next
+        # Pillow version quietly starts returning server errors.
+        raise AvatarRejectedError(
             "avatar_not_an_image", "That file is not an image we can read."
         ) from None
 
     fmt = (probe.format or "").upper()
     if fmt not in ALLOWED_FORMATS:
-        raise AvatarRejected(
+        raise AvatarRejectedError(
             "avatar_bad_format",
             "Please upload a JPEG, PNG or WebP image.",
         )
@@ -92,9 +96,9 @@ def build(raw: bytes) -> Avatar:
     # Read from the header, before any pixels are allocated.
     width, height = probe.size
     if width < 1 or height < 1:
-        raise AvatarRejected("avatar_not_an_image", "That image has no content.")
+        raise AvatarRejectedError("avatar_not_an_image", "That image has no content.")
     if width * height > MAX_SOURCE_PIXELS:
-        raise AvatarRejected(
+        raise AvatarRejectedError(
             "avatar_too_many_pixels", "That image is too large to process."
         )
 
@@ -106,10 +110,10 @@ def build(raw: bytes) -> Avatar:
         # A centred square crop, then resize. `fit` does both and keeps the
         # subject centred, which is what a circular avatar frame needs.
         image = ImageOps.fit(
-            image.convert("RGB"), (OUTPUT_SIZE, OUTPUT_SIZE), method=Image.LANCZOS
+            image.convert("RGB"), (OUTPUT_SIZE, OUTPUT_SIZE), method=Image.Resampling.LANCZOS
         )
-    except Exception:
-        raise AvatarRejected(
+    except Exception:  # noqa: BLE001 — same reasoning as the probe above
+        raise AvatarRejectedError(
             "avatar_unreadable", "That image could not be processed. Try another."
         ) from None
 

@@ -11,13 +11,12 @@ from app.core.logging import get_logger
 from app.core.security import hash_password, verify_password
 from app.db.models import ESIM, Customer, Testimonial
 from app.db.models.enums import ESIMStatus
+from app.domain import avatars
 from app.domain.referral import new_referral_code
 from app.repositories import content as content_repo
 from app.repositories import customers as customer_repo
 from app.repositories import orders as order_repo
 from app.schemas.base import JSONDict
-
-from app.domain import avatars
 
 logger = get_logger(__name__)
 
@@ -46,17 +45,17 @@ async def summary(
 
 
 async def set_avatar(session: AsyncSession, customer: Customer, raw: bytes) -> None:
-    """Store a re-encoded avatar. Raises AvatarRejected for anything unsuitable.
+    """Store a re-encoded avatar. Raises AvatarRejectedError for anything unsuitable.
 
     Only the re-encoded bytes are kept — never what was uploaded. The rejection
     carries a code so the storefront can say what was wrong in the customer's own
     language instead of "upload failed".
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     built = avatars.build(raw)
     customer.avatar_webp = built.webp
-    customer.avatar_updated_at = datetime.now(timezone.utc)
+    customer.avatar_updated_at = datetime.now(UTC)
     await session.commit()
     logger.info("account.avatar_set", customer_id=customer.id, bytes=len(built.webp))
 

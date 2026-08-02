@@ -10,14 +10,14 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import ColumnExpressionArgument, Subquery, func, or_, select
+from sqlalchemy import SQLColumnExpression, Subquery, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.models import Country, Plan, Region
 
 
-def localised_country_name(language: str) -> ColumnExpressionArgument[str]:
+def localised_country_name(language: str) -> SQLColumnExpression[str]:
     """The country name the customer is actually reading.
 
     Sorting on `Country.name` alone puts Yaponiya under J on the Uzbek page,
@@ -79,7 +79,11 @@ async def list_countries(
     if region_slug:
         stmt = stmt.join(Region, Region.id == Country.region_id).where(Region.slug == region_slug)
 
-    stmt = stmt.order_by(Country.sort_order, localised_country_name(language)).limit(limit).offset(offset)
+    stmt = (
+        stmt.order_by(Country.sort_order, localised_country_name(language))
+        .limit(limit)
+        .offset(offset)
+    )
     result = await session.execute(stmt)
     return [(row[0], row[1]) for row in result.all()]
 

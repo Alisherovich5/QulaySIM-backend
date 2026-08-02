@@ -101,12 +101,12 @@ async def upload_avatar(
     only thing that establishes an upload is an image is decoding it. Reading is
     capped so an oversized body cannot be streamed into memory first.
     """
-    from app.domain.avatars import MAX_UPLOAD_BYTES, AvatarRejected
+    from app.domain.avatars import MAX_UPLOAD_BYTES, AvatarRejectedError
 
     raw = await file.read(MAX_UPLOAD_BYTES + 1)
     try:
         await service.set_avatar(session, customer, raw)
-    except AvatarRejected as rejected:
+    except AvatarRejectedError as rejected:
         # 422 with the rule's code, matching how password rules are reported, so
         # the storefront can translate the reason rather than show it in English.
         raise ValidationError(rejected.message, code=rejected.code) from None
