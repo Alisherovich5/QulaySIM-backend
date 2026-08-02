@@ -28,9 +28,12 @@ from __future__ import annotations
 import io
 from dataclasses import dataclass
 
-# 5 MB in, a few kilobytes out. The cap exists so a request cannot tie up memory
-# before the pixel check runs.
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+# 15 MB in, a few kilobytes out. The cap exists so a request cannot tie up
+# memory before the pixel check runs — it is a safety valve, not a product
+# decision, and 5 MB turned out to be one: a current iPhone's photo is
+# routinely 5-10 MB straight off the camera, so the people most likely to set
+# an avatar were the ones being refused.
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 # Guards against a decompression bomb: a small file declaring an enormous canvas.
 MAX_SOURCE_PIXELS = 50_000_000
 OUTPUT_SIZE = 256
@@ -60,6 +63,19 @@ class Avatar:
 def build(raw: bytes) -> Avatar:
     """Validate, crop and re-encode an uploaded image. Raises AvatarRejectedError."""
     from PIL import Image, ImageOps, UnidentifiedImageError
+
+    # iPhones shoot HEIC by default. Pillow does not read it on its own —
+    # without this plugin every photo picked from an iPhone's library was
+    # refused as "not an image we can read", despite HEIC sitting in
+    # ALLOWED_FORMATS. Registered here beside Pillow's own import (both are
+    # deferred to first use), and guarded so an environment without the wheel
+    # degrades to exactly that old behaviour instead of failing to boot.
+    try:
+        from pillow_heif import register_heif_opener
+
+        register_heif_opener()
+    except ImportError:  # pragma: no cover — absent only in stripped-down envs
+        pass
 
     if not raw:
         raise AvatarRejectedError("avatar_empty", "The file is empty.")

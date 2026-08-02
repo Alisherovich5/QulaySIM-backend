@@ -92,6 +92,24 @@ class TestDataUri:
         assert avatars.to_data_uri(None) is None
         assert avatars.to_data_uri(b"") is None
 
+    def test_an_iphone_heic_is_accepted(self):
+        # iPhones shoot HEIC by default; this is the single most common camera
+        # format the picker will meet. Written with the same plugin the app
+        # decodes with — if the plugin is missing, this fails before a customer
+        # does.
+        import pillow_heif
+
+        buf = io.BytesIO()
+        pillow_heif.from_pillow(Image.new("RGB", (640, 480), "teal")).save(buf, format="HEIF")
+        result = avatars.build(buf.getvalue())
+        assert result.width == result.height == avatars.OUTPUT_SIZE
+
+    def test_the_cap_admits_a_phone_sized_photo(self):
+        # The old 5 MB cap refused what a current phone camera routinely
+        # produces. The exact number matters less than the property: a photo
+        # of ~10 MB must not be rejected for size alone.
+        assert avatars.MAX_UPLOAD_BYTES >= 10 * 1024 * 1024
+
     def test_a_webp_becomes_an_inline_uri(self):
         uri = avatars.to_data_uri(avatars.build(png()).webp)
         assert uri.startswith("data:image/webp;base64,")

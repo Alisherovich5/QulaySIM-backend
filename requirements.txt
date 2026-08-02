@@ -13,3 +13,5 @@ python-decouple>=3.8
 # Avatars are re-encoded before storage; decoding is how we prove an upload
 # is really an image rather than trusting its content type.
 Pillow>=10.0
+# HEIC/HEIF decode for iPhone photos — registered in app/domain/avatars.py.
+pillow-heif>=0.16
