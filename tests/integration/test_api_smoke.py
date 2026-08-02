@@ -426,7 +426,7 @@ class TestSitemapAndRobots:
 
     async def test_sitemap_lists_the_static_pages(self, client: AsyncClient) -> None:
         body = (await client.get("/sitemap.xml")).text
-        for path in ("/destinations", "/device-check", "/support"):
+        for path in ("/destinations", "/device-check", "/support", "/esim-nima", "/esim-ornatish"):
             assert f"<loc>https://qulaysim.uz{path}</loc>" in body, path
 
     async def test_every_page_is_listed_in_all_three_languages(

@@ -99,6 +99,9 @@ SITEMAP_STATIC_PATHS = (
     ("/destinations", "0.9", "daily"),
     ("/device-check", "0.7", "monthly"),
     ("/support", "0.6", "monthly"),
+    # The guide pages — static in the storefront, one per language like the rest.
+    ("/esim-nima", "0.7", "monthly"),
+    ("/esim-ornatish", "0.7", "monthly"),
 )
 
 # Uzbek is served from the root; the other two live under a path prefix.
