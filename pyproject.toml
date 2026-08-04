@@ -19,6 +19,12 @@ dependencies = [
     "redis[hiredis]>=5.0",
     "celery[redis]>=5.4",
     "qrcode[pil]>=7.4",
+    # Explicit, not transitive: avatars and OG cards render with Pillow
+    # directly; leaning on qrcode's [pil] extra meant the image only had it
+    # by luck. pillow-heif decodes what iPhones actually shoot — it was added
+    # to requirements.txt first, which this image does not install from.
+    "Pillow>=10.0",
+    "pillow-heif>=0.16",
     "python-multipart>=0.0.9",
     "structlog>=24.1",
     "orjson>=3.10",

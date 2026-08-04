@@ -21,6 +21,12 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH"
 
+# DejaVu for the Open Graph share cards (app/domain/og_card.py). Pillow needs
+# a real TTF to set type at 100px; the base image ships no fonts at all.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends fonts-dejavu-core \
+ && rm -rf /var/lib/apt/lists/*
+
 # Run unprivileged: a container escape should not land on root.
 RUN groupadd --system --gid 1001 app \
  && useradd --system --uid 1001 --gid app --create-home app

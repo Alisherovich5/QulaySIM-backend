@@ -16,6 +16,7 @@ from app.api.v1.routers import (
     checkout,
     content,
     health,
+    og,
     payme,
     support,
     webhooks,
@@ -81,6 +82,7 @@ def create_app() -> FastAPI:
         auth.router,
         catalog.router,
         content.router,
+        og.router,
         checkout.router,
         account.router,
         payme.router,
@@ -187,6 +189,20 @@ def _register_sitemap(app: FastAPI) -> None:
             # the country is its real last-modified date. Country itself carries
             # no timestamp to use.
             async with SessionFactory() as session:
+                # Region hubs sit between the catalogue and the country tier;
+                # only regions that actually contain an active country get an
+                # address, mirroring the prerenderer's rule.
+                from app.db.models import Region
+
+                region_rows = (
+                    await session.execute(
+                        select(Region.slug)
+                        .join(Country, Country.region_id == Region.id)
+                        .where(Country.is_active.is_(True))
+                        .group_by(Region.slug)
+                        .order_by(Region.slug)
+                    )
+                ).scalars().all()
                 rows = (
                     await session.execute(
                         select(Country.slug, func.max(SupplierOffer.updated_at))
@@ -197,6 +213,10 @@ def _register_sitemap(app: FastAPI) -> None:
                         .order_by(Country.slug)
                     )
                 ).all()
+            for slug in region_rows:
+                lines.extend(
+                    _sitemap_entries(base, f"/destinations/region/{slug}", "0.85", "weekly")
+                )
             for slug, updated in rows:
                 lines.extend(
                     _sitemap_entries(
