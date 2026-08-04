@@ -107,6 +107,28 @@ class TestTokenLifecycle:
             )
 
 
+@pytest.mark.asyncio
+async def test_without_a_fiscal_code_the_invoice_carries_no_items(monkeypatch):
+    # The DEV store refuses any items array until the fiscal module is on;
+    # a codeless configuration must therefore send the bare total.
+    monkeypatch.setattr(settings, "atmos_ikpu_code", "")
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/token":
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"url": "https://x/i?id=1", "status": {"code": "0"}})
+
+    await client.create_invoice(
+        account="1",
+        amount_tiyin=100000,
+        lines=[{"name": "x", "amount_tiyin": 100000, "quantity": 1}],
+        transport=httpx.MockTransport(handler),
+    )
+    assert "items" not in seen[0]
+
+
 class TestInvoiceItems:
     def test_lines_carry_the_fiscal_code_and_integer_amounts(self):
         items = client._invoice_items(

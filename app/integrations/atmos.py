@@ -132,7 +132,7 @@ async def create_invoice(
     `account` is the value ATMOS will echo back in the callback — it is how the
     callback finds the order, so it must be the order id and nothing cleverer.
     """
-    payload = {
+    payload: dict[str, Any] = {
         # Unique per attempt, not per order: a retried create must not collide
         # with the invoice a lost response already created.
         "request_id": uuid.uuid4().hex,
@@ -140,8 +140,14 @@ async def create_invoice(
         "account": account,
         "amount": amount_tiyin,
         "success_url": settings.atmos_success_url,
-        "items": _invoice_items(lines),
     }
+    # Only with a real fiscal code. Proven against the DEV store (11035):
+    # any items array — empty code or plausible 17-digit one — answers
+    # -999999 "System error", while the same invoice without items succeeds.
+    # So until the business supplies the ИКПУ (and ATMOS enables the fiscal
+    # module for the store), the invoice goes up as a single total.
+    if settings.atmos_ikpu_code:
+        payload["items"] = _invoice_items(lines)
 
     async with httpx.AsyncClient(transport=transport) as client:
         response = await _authorised_post(client, "/checkout/invoice/create", payload)
