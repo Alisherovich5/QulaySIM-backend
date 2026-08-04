@@ -47,6 +47,7 @@ async def price_cart(
                 plan_id=plan.id,
                 title=plan.title,
                 unit_price=plan.price_usd,
+                unit_cost=plan.cost_usd,
                 quantity=item.quantity,
             )
         )

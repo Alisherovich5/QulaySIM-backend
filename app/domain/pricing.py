@@ -23,6 +23,9 @@ class PricedLine:
     title: str
     unit_price: Decimal
     quantity: int
+    # Carried alongside the price so the order can freeze both sides of the
+    # margin; None when the plan has no supplier cost (manually priced).
+    unit_cost: Decimal | None = None
 
     @property
     def line_total(self) -> Decimal:

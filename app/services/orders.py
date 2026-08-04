@@ -109,6 +109,7 @@ async def place_order(
                 order_id=order.id,
                 plan_id=line.plan_id,
                 unit_price=line.unit_price,
+                unit_cost=line.unit_cost,
                 quantity=line.quantity,
             )
         )

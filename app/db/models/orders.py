@@ -59,6 +59,11 @@ class OrderItem(Base):
     order_id: Mapped[int] = mapped_column(ForeignKey("orders_order.id"))
     plan_id: Mapped[int] = mapped_column(ForeignKey("catalog_plan.id"))
     unit_price: Mapped[Decimal] = mapped_column(Numeric(8, 2))
+    # What the supplier charged at the moment of sale. Frozen here because the
+    # plan's live cost moves with every repricing sync — joining to it later
+    # silently rewrites the margin history the dashboard reports. Nullable:
+    # rows sold before this column existed have no snapshot to claim.
+    unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
 
     order: Mapped[Order] = relationship(back_populates="items")
