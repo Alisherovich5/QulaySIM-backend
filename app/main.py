@@ -106,6 +106,11 @@ SITEMAP_STATIC_PATHS = (
     # The guide pages — static in the storefront, one per language like the rest.
     ("/esim-nima", "0.7", "monthly"),
     ("/esim-ornatish", "0.7", "monthly"),
+    # Legal texts — low priority, but their presence is part of what a payment
+    # provider's production review checks for.
+    ("/oferta", "0.3", "yearly"),
+    ("/qaytarish", "0.3", "yearly"),
+    ("/maxfiylik", "0.3", "yearly"),
 )
 
 # Uzbek is served from the root; the other two live under a path prefix.
