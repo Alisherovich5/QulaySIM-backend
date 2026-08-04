@@ -8,10 +8,14 @@ The access token stays in the response body. It is short-lived (30 minutes) and
 the client keeps it in memory only, so a page reload silently re-mints it from
 the cookie rather than persisting anything a script could read.
 
-SameSite is None in production because the storefront and the API are served
-from different hosts. CSRF against `/api/auth/refresh` is not exploitable: the
-attacker cannot read the rotated token (CORS blocks the response), so the worst
-outcome is a needless rotation.
+SameSite is Lax. It used to be None, justified by the storefront and the API
+living on different hosts — that stopped being true: the front end calls a
+relative `/api` on qulaysim.uz, the only allowed CORS origin is qulaysim.uz
+itself, and the admin never touches this API. None meant the browser attached
+the refresh cookie to cross-site requests it never needed to, which is a CSRF
+surface kept open for a reason that had expired. Lax still covers every real
+flow, including the Google sign-in popup: the credential comes back through a
+same-origin XHR.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ def set_refresh_cookie(response: Response, token: str) -> None:
         path=REFRESH_COOKIE_PATH,
         httponly=True,
         secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
+        samesite="lax",
     )
 
 
@@ -42,7 +46,7 @@ def clear_refresh_cookie(response: Response) -> None:
         path=REFRESH_COOKIE_PATH,
         httponly=True,
         secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
+        samesite="lax",
     )
 
 
@@ -60,7 +64,7 @@ def set_session_hint(response: Response) -> None:
         path="/",
         httponly=False,
         secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
+        samesite="lax",
     )
 
 
@@ -69,5 +73,5 @@ def clear_session_hint(response: Response) -> None:
         key=SESSION_HINT_COOKIE,
         path="/",
         secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
+        samesite="lax",
     )

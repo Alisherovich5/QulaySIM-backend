@@ -28,7 +28,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "structlog>=24.1",
     "orjson>=3.10",
-    "cryptography>=42.0",
+    "cryptography>=50.0",   # PYSEC-2026-3552
 ]
 
 [project.optional-dependencies]

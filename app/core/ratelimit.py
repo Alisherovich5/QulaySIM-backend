@@ -6,6 +6,8 @@ restart, did not apply across workers, and grew without bound.
 
 from __future__ import annotations
 
+import hashlib
+
 from fastapi import Request
 
 from app.core.cache import get_redis
@@ -76,7 +78,11 @@ async def enforce(bucket: str, identity: str, rule: str) -> None:
     out of logging in.
     """
     limit, window = parse_rule(rule)
-    key = f"qs:rl:{bucket}:{identity}"
+    # The identity is hashed, not stored: the per-account login bucket keys on
+    # an e-mail address, and a Redis snapshot or a `--scan` by anyone who
+    # reaches the cache should not hand over a list of customer addresses. A
+    # truncated SHA-256 keeps the bucket just as unique without holding the PII.
+    key = f"qs:rl:{bucket}:{hashlib.sha256(identity.encode()).hexdigest()[:32]}"
     try:
         current, ttl = await get_redis().eval(  # type: ignore[no-untyped-call]
             _LUA_INCR_EXPIRE, 1, key, window
@@ -86,9 +92,10 @@ async def enforce(bucket: str, identity: str, rule: str) -> None:
         return
 
     if current > limit:
-        # `identity` is an address or an e-mail the caller supplied; both are
-        # bounded and validated upstream, so neither can smuggle a log line.
-        logger.info("ratelimit.blocked", bucket=bucket, identity=identity, count=current)
+        # The bucket and count are what an operator acts on; the identity is
+        # PII and the hashed key above is enough to correlate repeat offenders
+        # across log lines without writing an address into them.
+        logger.info("ratelimit.blocked", bucket=bucket, count=current)
         raise RateLimitedError(
             "Too many requests. Please wait and try again.",
             retry_after=max(int(ttl), 1),
