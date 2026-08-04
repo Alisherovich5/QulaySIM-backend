@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     cache_ttl_currency: int = 21600
 
     # --- Providers ---------------------------------------------------------
-    payment_provider: Literal["disabled", "mock", "payme"] = "disabled"
+    payment_provider: Literal["disabled", "mock", "payme", "atmos"] = "disabled"
 
     # --- Payme (Paycom) ----------------------------------------------------
     # The merchant key authenticates Payme's calls to us. The test key is
@@ -80,6 +80,22 @@ class Settings(BaseSettings):
     # The key inside Payme's `account` object. Must match the merchant cabinet.
     payme_account_field: str = "order_id"
     payme_return_url: str = ""
+
+    # --- ATMOS (hosted checkout + Callback API) ------------------------------
+    # The callback api_key is a separate credential from the OAuth pair: ATMOS
+    # signs each callback with it, and we never send it anywhere.
+    atmos_consumer_key: str = ""
+    atmos_consumer_secret: str = ""
+    atmos_store_id: int = 0
+    atmos_callback_api_key: str = ""
+    # Fiscal (OFD) classification code for the eSIM service line items. The
+    # business gets this from ATMOS / the tax classifier; invoices are refused
+    # without it once fiscalisation is enforced.
+    atmos_ikpu_code: str = ""
+    atmos_base_url: str = "https://apigw.atmos.uz"
+    # ATMOS documents this range as the source of every callback.
+    atmos_callback_cidr: str = "92.63.207.0/24"
+    atmos_success_url: str = "https://qulaysim.uz/account"
     # Master switch only. Which wholesaler fulfils a given order is decided per
     # plan by the cheapest supplier offer (see app/integrations/suppliers.py);
     # this just says whether real supplier calls happen at all, so "mock" stays

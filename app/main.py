@@ -11,6 +11,7 @@ from fastapi.responses import ORJSONResponse
 
 from app.api.v1.routers import (
     account,
+    atmos,
     auth,
     catalog,
     checkout,
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
 
     for router in (
         health.router,
+        atmos.router,
         auth.router,
         catalog.router,
         content.router,

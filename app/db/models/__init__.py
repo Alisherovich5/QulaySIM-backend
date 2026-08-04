@@ -22,6 +22,7 @@ from app.db.models.enums import (
 )
 from app.db.models.orders import (
     ESIM,
+    AtmosTransaction,
     Order,
     OrderItem,
     Payment,
@@ -32,6 +33,7 @@ from app.db.models.orders import (
 __all__ = [
     "ESIM",
     "FAQ",
+    "AtmosTransaction",
     "Banner",
     "Benefit",
     "Country",

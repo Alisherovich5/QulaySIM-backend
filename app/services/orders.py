@@ -22,6 +22,7 @@ from app.core.errors import ConflictError, DomainError, ServiceUnavailableError
 from app.core.logging import get_logger
 from app.db.models import Customer, Order, OrderItem, PromoCode
 from app.db.models.enums import OrderStatus
+from app.domain.pricing import Quote
 from app.integrations.payme import checkout_url
 from app.schemas.commerce import CartItemIn
 from app.services.checkout import price_cart
@@ -62,10 +63,15 @@ async def place_order(
         raise ServiceUnavailableError(
             "Online payments are being configured. Please try again soon."
         )
-    if settings.payment_provider != "payme":
+    if settings.payment_provider not in ("payme", "atmos"):
         raise DomainError("Configured payment provider is not implemented", code="not_implemented")
-    if not settings.payme_merchant_id:
+    if settings.payment_provider == "payme" and not settings.payme_merchant_id:
         logger.error("orders.payme_unconfigured")
+        raise ServiceUnavailableError("Payments are not configured. Please try again soon.")
+    if settings.payment_provider == "atmos" and not (
+        settings.atmos_consumer_key and settings.atmos_consumer_secret and settings.atmos_store_id
+    ):
+        logger.error("orders.atmos_unconfigured")
         raise ServiceUnavailableError("Payments are not configured. Please try again soon.")
 
     # Price server-side: the cart came from the customer's browser and its
@@ -84,7 +90,7 @@ async def place_order(
         total=quote.total,
         amount_uzs=amount_uzs,
         exchange_rate=rate,
-        provider="payme",
+        provider=settings.payment_provider,
     )
 
     if quote.promo_applied and promo_code:
@@ -130,15 +136,46 @@ async def place_order(
         "total_usd": quote.total,
         "amount_uzs": amount_uzs,
         "exchange_rate": rate,
-        "payment_url": checkout_url(
-            base_url=settings.payme_checkout_url,
-            merchant_id=settings.payme_merchant_id,
-            account_field=settings.payme_account_field,
-            account_value=str(order.id),
-            amount_tiyin=int((amount_uzs * 100).to_integral_value()),
-            return_url=settings.payme_return_url,
-        ),
+        "payment_url": await _payment_url(order.id, amount_uzs, quote),
     }
+
+
+async def _payment_url(order_id: int, amount_uzs: Decimal, quote: Quote) -> str:
+    """The link the customer pays at, from whichever provider is live.
+
+    Built after the order is committed so a provider hiccup can never leave a
+    paid-for order unrecorded — the customer just retries the checkout.
+    """
+    amount_tiyin = int((amount_uzs * 100).to_integral_value())
+    if settings.payment_provider == "atmos":
+        from app.integrations.atmos import create_invoice
+
+        # The invoice's fiscal lines must sum to its amount exactly, but the
+        # lines are priced in USD and the amount was frozen in som — so each
+        # line takes its proportional share of the tiyin total and the last
+        # line absorbs the rounding remainder. The discount, if any, spreads
+        # itself across the lines the same way, which is also what the tax
+        # receipt should say.
+        line_totals = [line.unit_price * line.quantity for line in quote.lines]
+        grand = sum(line_totals) or 1
+        shares = [int(amount_tiyin * (t / grand)) for t in line_totals]
+        shares[-1] += amount_tiyin - sum(shares)
+        return await create_invoice(
+            account=str(order_id),
+            amount_tiyin=amount_tiyin,
+            lines=[
+                {"name": line.title, "amount_tiyin": share, "quantity": line.quantity}
+                for line, share in zip(quote.lines, shares, strict=True)
+            ],
+        )
+    return checkout_url(
+        base_url=settings.payme_checkout_url,
+        merchant_id=settings.payme_merchant_id,
+        account_field=settings.payme_account_field,
+        account_value=str(order_id),
+        amount_tiyin=amount_tiyin,
+        return_url=settings.payme_return_url,
+    )
 
 
 async def cancel_unpaid_order(session: AsyncSession, customer: Customer, order_id: int) -> None:

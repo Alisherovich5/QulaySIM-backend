@@ -131,3 +131,26 @@ class PaymeTransaction(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     order: Mapped[Order] = relationship()
+
+
+class AtmosTransaction(Base):
+    """Mirrors orders_atmostransaction — the Django model owns the schema.
+
+    Unlike Payme there is no provider-driven state machine: a callback either
+    confirmed the order or was rejected, and that verdict never changes from
+    our side. transaction_id is unique so a retried callback collides here
+    instead of double-recording a payment.
+    """
+
+    __tablename__ = "orders_atmostransaction"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders_order.id"))
+    transaction_id: Mapped[str] = mapped_column(String(64), unique=True)
+    amount_tiyin: Mapped[int] = mapped_column(BigInteger)
+    account: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="confirmed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    order: Mapped[Order] = relationship()
