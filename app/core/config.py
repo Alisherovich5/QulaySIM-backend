@@ -117,6 +117,19 @@ class Settings(BaseSettings):
     esimaccess_webhook_token: str = ""
     esimaccess_timeout_seconds: int = 20
 
+    # Wholesalers we have working ordering code for, as a comma-separated list.
+    # Checkout refuses a plan no supplier on this list can supply — see
+    # app.services.checkout.is_fulfillable. Mirrors the Django setting of the
+    # same name; both read the same env var so they cannot disagree about which
+    # supplier is connected.
+    # Aliased, so the env var really is FULFILLABLE_PROVIDERS rather than
+    # FULFILLABLE_PROVIDERS_RAW: two services reading differently-named variables
+    # for the same decision is how one of them ends up connected and the other
+    # does not.
+    fulfillable_providers_raw: str = Field(
+        default="esimaccess,esimcard", validation_alias="FULFILLABLE_PROVIDERS"
+    )
+
     # eSIMCard, the second wholesaler. The base URL is NOT esimcard.com: that
     # host now answers every API path with HTTP 410 "API moved to
     # portal.esimcard.com", which a client checking only the response body would
@@ -147,6 +160,12 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def fulfillable_providers(self) -> tuple[str, ...]:
+        return tuple(
+            part.strip() for part in self.fulfillable_providers_raw.split(",") if part.strip()
+        )
 
     @property
     def supplier_calls_enabled(self) -> bool:

@@ -166,6 +166,38 @@ services:
     restart: "no"
     logging: *logging
 
+  # The catalogue keeps itself current.
+  #
+  # Both wholesalers are read from their APIs and the destinations, tariffs and
+  # supplier prices are rebuilt from what they actually sell. This exists because
+  # the catalogue used to be maintained by hand — somebody downloading a price
+  # list and remembering to apply it — and while that was being skipped the site
+  # sold 25 destinations out of the 193 the two APIs offer.
+  #
+  # A loop with a sleep rather than cron: the image has no cron, and a service
+  # docker restarts is easier to reason about than a crontab nobody can see. It
+  # syncs on start (so a deploy picks up new stock immediately) and then daily.
+  #
+  # New destinations arrive switched OFF — `--activate-new` is deliberately not
+  # passed. A destination goes live the moment it is active, and a fresh one has
+  # had nobody check its prices or its Uzbek name.
+  #
+  # Reading eSIMCard takes about five minutes (65 pages, ~4.4s each), which is
+  # why this is a background service and not a button in the admin.
+  catalog-sync:
+    image: ${ADMIN_IMAGE}
+    command: >
+      sh -c 'while true; do
+        python manage.py sync_catalog --apply || echo "catalog sync failed";
+        sleep 86400;
+      done'
+    environment: *django-env
+    networks: [internal]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    logging: *logging
+
   api:
     image: ${API_IMAGE}
     environment: *api-env

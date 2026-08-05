@@ -98,6 +98,19 @@ def seed():
                 for j, (suffix, data_mb, days, price, net, unlimited, pop) in enumerate(
                     PLAN_TEMPLATES
                 ):
+                    # A seeded plan names a wholesaler and a package code.
+                    #
+                    # Not decoration: checkout refuses a plan no connected
+                    # supplier can supply, and it refuses it because this seed
+                    # once ran against production and left twenty plans on sale
+                    # at $29.90-$35.88 with no supplier and no code — a card
+                    # would have been charged for an eSIM that could never be
+                    # issued. Development data that cannot be sold in
+                    # development would hide that gate instead of exercising it.
+                    #
+                    # Nothing is actually bought: ESIM_PROVIDER=mock is what
+                    # stops supplier calls, and the SEED- prefix makes it obvious
+                    # in any log that this code is not a real package.
                     db.add(
                         Plan(
                             scope="local",
@@ -112,6 +125,10 @@ def seed():
                             is_popular=pop,
                             is_active=True,
                             sort_order=j,
+                            provider="esimaccess",
+                            provider_package_code=(
+                                f"SEED-{country.iso2}-{data_mb}-{days}"
+                            ),
                         )
                     )
 

@@ -111,11 +111,20 @@ async def get_active_plan(session: AsyncSession, plan_id: int) -> Plan | None:
 
 
 async def get_active_plans(session: AsyncSession, plan_ids: list[int]) -> dict[int, Plan]:
-    """Single query for a whole cart — avoids one SELECT per line item."""
+    """Single query for a whole cart — avoids one SELECT per line item.
+
+    Loads each plan's supplier offers with it, because `is_active` alone is not
+    enough to decide a plan may be sold: a plan can be active, priced, and have
+    no wholesaler able to supply it. Twenty such plans were live at $29.90–$35.88
+    with no offer and no package code, so the money would have been taken and no
+    eSIM could ever have been issued. See `is_fulfillable`.
+    """
     if not plan_ids:
         return {}
     result = await session.execute(
-        select(Plan).where(Plan.id.in_(set(plan_ids)), Plan.is_active.is_(True))
+        select(Plan)
+        .options(selectinload(Plan.offers))
+        .where(Plan.id.in_(set(plan_ids)), Plan.is_active.is_(True))
     )
     return {plan.id: plan for plan in result.scalars().all()}
 
