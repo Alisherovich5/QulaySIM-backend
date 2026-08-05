@@ -71,6 +71,17 @@ x-django-env: &django-env
   ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
   CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}
   ADMIN_URL_PATH: ${ADMIN_URL_PATH}
+  # The catalogue sync reads both wholesalers directly. Same variable names as
+  # the API uses, so one .env serves both and there is no second copy of a
+  # credential to get out of step.
+  ESIMACCESS_BASE_URL: ${ESIMACCESS_BASE_URL:-https://api.esimaccess.com}
+  ESIMACCESS_ACCESS_CODE: ${ESIMACCESS_ACCESS_CODE:-}
+  ESIMACCESS_SECRET_KEY: ${ESIMACCESS_SECRET_KEY:-}
+  ESIMCARD_BASE_URL: ${ESIMCARD_BASE_URL:-https://portal.esimcard.com/api/developer/reseller}
+  ESIMCARD_API_TOKEN: ${ESIMCARD_API_TOKEN:-}
+  # Which wholesalers we can actually order from. Checkout refuses a plan none
+  # of them can supply, so this must match what the API reads.
+  FULFILLABLE_PROVIDERS: ${FULFILLABLE_PROVIDERS:-esimaccess,esimcard}
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
   LOG_LEVEL: ${LOG_LEVEL}
 
@@ -193,6 +204,13 @@ services:
       done'
     environment: *django-env
     networks: [internal]
+    # The admin image ships an HTTP healthcheck and this service serves no HTTP,
+    # so it would sit "unhealthy" forever and make `compose ps` useless for
+    # spotting a service that is genuinely broken. There is nothing to probe here:
+    # what matters is whether the last run succeeded, which is what the
+    # CatalogSyncRun rows record.
+    healthcheck:
+      disable: true
     depends_on:
       migrate: {condition: service_completed_successfully}
     restart: unless-stopped
