@@ -98,25 +98,34 @@ async def _authorised_post(
 
 
 def _invoice_items(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Order lines in the shape checkout/invoice/create wants.
+    """Order lines in the shape checkout/invoice/create actually wants.
 
-    The doc's sample also nests a `details` array of fiscal attributes
-    (package_code, mark_code, tin). Those values do not exist for a digital
-    service until the business registers them; the sandbox will say whether
-    the array may be omitted, and this is the one place to add it if not.
+    Two corrections the published doc does not give you, both found by probing
+    the DEV store and confirmed by a sample ATMOS sent us:
+
+      * `details` is REQUIRED. An item without it answers -999999 "System
+        error" — the same opaque failure we chased for two days, and the reason
+        invoices went up as a bare total for a while.
+      * `details` is an OBJECT, not the array the doc's example shows. A single
+        {"name": ..., "values": ...} pair.
+
+    `code` (ИКПУ) turns out to be optional, and is sent when configured so the
+    fiscal receipt classifies the service correctly once ATMOS enables
+    fiscalisation for the store.
     """
     items = []
     for index, line in enumerate(lines, start=1):
-        items.append(
-            {
-                "items_id": str(index),
-                "code": settings.atmos_ikpu_code,
-                # ATMOS renders this on the payment page and the fiscal receipt.
-                "name": str(line["name"])[:120],
-                "amount": int(line["amount_tiyin"]),
-                "quantity": int(line["quantity"]),
-            }
-        )
+        item: dict[str, Any] = {
+            "items_id": str(index),
+            # ATMOS renders this on the payment page and the fiscal receipt.
+            "name": str(line["name"])[:120],
+            "amount": int(line["amount_tiyin"]),
+            "quantity": int(line["quantity"]),
+            "details": {"name": "ikpu", "values": settings.atmos_ikpu_code or "n/a"},
+        }
+        if settings.atmos_ikpu_code:
+            item["code"] = settings.atmos_ikpu_code
+        items.append(item)
     return items
 
 
@@ -141,13 +150,10 @@ async def create_invoice(
         "amount": amount_tiyin,
         "success_url": settings.atmos_success_url,
     }
-    # Only with a real fiscal code. Proven against the DEV store (11035):
-    # any items array — empty code or plausible 17-digit one — answers
-    # -999999 "System error", while the same invoice without items succeeds.
-    # So until the business supplies the ИКПУ (and ATMOS enables the fiscal
-    # module for the store), the invoice goes up as a single total.
-    if settings.atmos_ikpu_code:
-        payload["items"] = _invoice_items(lines)
+    # Always sent now that the required `details` object is in place; the
+    # earlier "-999999 unless items are omitted" behaviour was that missing
+    # field, not the fiscal code.
+    payload["items"] = _invoice_items(lines)
 
     async with httpx.AsyncClient(transport=transport) as client:
         response = await _authorised_post(client, "/checkout/invoice/create", payload)

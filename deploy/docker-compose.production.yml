@@ -1,0 +1,262 @@
+# QulaySIM production.
+#
+# Deliberately a separate compose project from `dental`: its own network, its
+# own Postgres and Redis, its own volumes. Nothing here can restart, rebuild
+# or reconfigure the dental stack.
+#
+# The single shared resource is Caddy, which owns 80/443. QulaySIM's public
+# containers join dental's edge network so Caddy can reach them by name — that
+# is declared here only and changes nothing on the dental side.
+#
+# Images come from GHCR, built by CI. There is no build context: source code
+# never lands on this host. A release is a tag change in .env; a rollback is
+# the previous tag.
+#
+#   sudo docker compose --env-file .env -p qulaysim pull
+#   sudo docker compose --env-file .env -p qulaysim run --rm migrate
+#   sudo docker compose --env-file .env -p qulaysim up -d
+
+name: qulaysim
+
+x-api-env: &api-env
+  ENVIRONMENT: ${ENVIRONMENT}
+  DEBUG: ${DEBUG}
+  LOG_LEVEL: ${LOG_LEVEL}
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_URL: ${REDIS_URL}
+  JWT_SECRET: ${JWT_SECRET}
+  JWT_ALGORITHM: ${JWT_ALGORITHM}
+  ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES}
+  REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS}
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+  CORS_ORIGINS: ${CORS_ORIGINS}
+  PAYMENT_PROVIDER: ${PAYMENT_PROVIDER}
+  PAYME_MERCHANT_ID: ${PAYME_MERCHANT_ID}
+  PAYME_MERCHANT_KEY: ${PAYME_MERCHANT_KEY}
+  PAYME_TEST_KEY: ${PAYME_TEST_KEY}
+  PAYME_CHECKOUT_URL: ${PAYME_CHECKOUT_URL}
+  PAYME_ACCOUNT_FIELD: ${PAYME_ACCOUNT_FIELD}
+  PAYME_RETURN_URL: ${PAYME_RETURN_URL}
+  # Public identifier for Sign-in-with-Google; empty hides the button.
+  PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://qulaysim.uz}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  ESIM_PROVIDER: ${ESIM_PROVIDER}
+  ESIMACCESS_BASE_URL: ${ESIMACCESS_BASE_URL}
+  ESIMACCESS_ACCESS_CODE: ${ESIMACCESS_ACCESS_CODE}
+  ESIMACCESS_SECRET_KEY: ${ESIMACCESS_SECRET_KEY}
+  ESIMACCESS_WEBHOOK_TOKEN: ${ESIMACCESS_WEBHOOK_TOKEN}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+  TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+  # ATMOS hosted checkout. Defaults keep the API bootable when the store is
+  # not configured: place_order refuses and the callback rejects everything.
+  ATMOS_CONSUMER_KEY: ${ATMOS_CONSUMER_KEY:-}
+  ATMOS_CONSUMER_SECRET: ${ATMOS_CONSUMER_SECRET:-}
+  ATMOS_STORE_ID: ${ATMOS_STORE_ID:-0}
+  ATMOS_CALLBACK_API_KEY: ${ATMOS_CALLBACK_API_KEY:-}
+  ATMOS_IKPU_CODE: ${ATMOS_IKPU_CODE:-}
+  ATMOS_BASE_URL: ${ATMOS_BASE_URL:-https://apigw.atmos.uz}
+  ATMOS_SUCCESS_URL: ${ATMOS_SUCCESS_URL:-https://qulaysim.uz/account}
+
+x-django-env: &django-env
+  DB_NAME: ${DB_NAME}
+  DB_USER: ${DB_USER}
+  DB_PASSWORD: ${DB_PASSWORD}
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  REDIS_URL: ${REDIS_URL}
+  SECRET_KEY: ${DJANGO_SECRET_KEY}
+  DEBUG: ${DJANGO_DEBUG}
+  ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS}
+  CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}
+  ADMIN_URL_PATH: ${ADMIN_URL_PATH}
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
+  LOG_LEVEL: ${LOG_LEVEL}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    logging: &logging
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  # Nightly logical dump. Without this the only copy of every customer, order and
+  # eSIM is one Docker volume, and losing it loses the business — so this is the
+  # same sidecar pattern the dental stack already runs, not a new invention.
+  #
+  # The dump is written to a temp name and only renamed once pg_dump succeeded,
+  # the file is non-empty and gzip -t verifies it. A truncated archive that looks
+  # like a backup is worse than no backup, because it is trusted.
+  postgres-backup:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_BACKUP_RETENTION_DAYS: ${POSTGRES_BACKUP_RETENTION_DAYS:-14}
+      POSTGRES_BACKUP_INTERVAL_SECONDS: ${POSTGRES_BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - pgbackups:/backups
+    networks: [internal]
+    restart: unless-stopped
+    logging: *logging
+    command:
+      - sh
+      - -c
+      - |
+        umask 077; mkdir -p /backups; while true; do
+          stamp=$$(date -u +%Y%m%dT%H%M%SZ);
+          archive="/backups/$${POSTGRES_DB}_$${stamp}.sql.gz";
+          plain_tmp="$${archive}.sql.tmp"; archive_tmp="$${archive}.tmp";
+          if pg_dump -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" --no-owner --no-privileges > "$$plain_tmp" \
+            && test -s "$$plain_tmp" \
+            && gzip -c "$$plain_tmp" > "$$archive_tmp" \
+            && test -s "$$archive_tmp" \
+            && gzip -t "$$archive_tmp"; then
+            mv "$$archive_tmp" "$$archive";
+            echo "backup published $$archive";
+          else
+            echo "Postgres backup failed; no archive published" >&2; rm -f "$$archive_tmp";
+          fi;
+          rm -f "$$plain_tmp";
+          find /backups -type f -name "*.sql.gz" -mtime +"$${POSTGRES_BACKUP_RETENTION_DAYS:-14}" -delete;
+          sleep "$${POSTGRES_BACKUP_INTERVAL_SECONDS:-86400}";
+        done
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --maxmemory 192mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    logging: *logging
+
+  # Django owns every migration. Everything that touches the database waits for
+  # this, so the API never starts against a half-built schema.
+  migrate:
+    image: ${ADMIN_IMAGE}
+    command: python manage.py migrate --noinput
+    environment: *django-env
+    networks: [internal]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+    logging: *logging
+
+  api:
+    image: ${API_IMAGE}
+    environment: *api-env
+    networks:
+      # `internal` for Postgres and Redis; `edge` so Caddy can reach it.
+      internal: {}
+      edge:
+        # Explicit alias: the default is the bare service name `api`, which
+        # would collide the moment the dental stack gains a service by that
+        # name on the same network.
+        aliases: [qulaysim-api]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    logging: *logging
+
+  worker:
+    image: ${API_IMAGE}
+    command: celery -A app.workers.celery_app.celery_app worker --loglevel=INFO --concurrency=2
+    environment: *api-env
+    networks: [internal]
+    # The image ships the API's HTTP healthcheck and a Celery worker serves no
+    # HTTP, so it would sit unhealthy forever. Ask Celery instead.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    logging: *logging
+
+  beat:
+    image: ${API_IMAGE}
+    command: >
+      celery -A app.workers.celery_app.celery_app beat --loglevel=INFO
+      --schedule=/var/lib/celery/beat-schedule
+    environment: *api-env
+    networks: [internal]
+    volumes:
+      - beatdata:/var/lib/celery
+    # The image ships the API's HTTP healthcheck and beat serves no HTTP, so it
+    # would sit unhealthy forever. Check the schedule file instead.
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /var/lib/celery/beat-schedule || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+    logging: *logging
+
+  admin:
+    image: ${ADMIN_IMAGE}
+    environment: *django-env
+    networks:
+      internal: {}
+      edge:
+        aliases: [qulaysim-admin]
+    depends_on:
+      postgres: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    logging: *logging
+
+  storefront:
+    image: ${WEB_IMAGE}
+    networks:
+      edge:
+        aliases: [qulaysim-web]
+    depends_on: [api]
+    restart: unless-stopped
+    logging: *logging
+
+networks:
+  internal:
+    # Postgres and Redis are reachable only from here.
+    driver: bridge
+  edge:
+    # dental's existing edge network, where Caddy lives. Declared external so
+    # this project never creates or removes it.
+    external: true
+    name: dental_edge
+
+volumes:
+  pgdata:
+  pgbackups:
+  redisdata:
+  beatdata:

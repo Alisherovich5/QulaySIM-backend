@@ -108,9 +108,10 @@ class TestTokenLifecycle:
 
 
 @pytest.mark.asyncio
-async def test_without_a_fiscal_code_the_invoice_carries_no_items(monkeypatch):
-    # The DEV store refuses any items array until the fiscal module is on;
-    # a codeless configuration must therefore send the bare total.
+async def test_items_always_carry_the_required_details_object(monkeypatch):
+    # `details` missing is what produced -999999 on the DEV store, and it must
+    # be an object rather than the array the doc's example shows. Sent even
+    # without a fiscal code, since `code` is the optional half.
     monkeypatch.setattr(settings, "atmos_ikpu_code", "")
     seen: list[dict] = []
 
@@ -126,7 +127,10 @@ async def test_without_a_fiscal_code_the_invoice_carries_no_items(monkeypatch):
         lines=[{"name": "x", "amount_tiyin": 100000, "quantity": 1}],
         transport=httpx.MockTransport(handler),
     )
-    assert "items" not in seen[0]
+    item = seen[0]["items"][0]
+    assert isinstance(item["details"], dict), "details must be an object, not a list"
+    assert set(item["details"]) == {"name", "values"}
+    assert "code" not in item, "no fiscal code configured — omit it, do not send empty"
 
 
 class TestInvoiceItems:
@@ -137,10 +141,11 @@ class TestInvoiceItems:
         assert items == [
             {
                 "items_id": "1",
-                "code": settings.atmos_ikpu_code,
                 "name": "Turkey 3GB / 30 kun",
                 "amount": 259900,
                 "quantity": 2,
+                "details": {"name": "ikpu", "values": settings.atmos_ikpu_code},
+                "code": settings.atmos_ikpu_code,
             }
         ]
         # The payload must be JSON-serialisable as-is.
