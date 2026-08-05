@@ -3,7 +3,16 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, utcnow
@@ -131,6 +140,40 @@ class PaymeTransaction(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     order: Mapped[Order] = relationship()
+
+
+class SupplierPurchase(Base):
+    """Mirrors orders_supplierpurchase — the Django model owns the schema.
+
+    The one thing standing between a Celery retry and a second eSIM bought at
+    our own expense. eSIM Access deduplicates by the transaction id we hand it;
+    eSIMCard's purchase endpoint takes a package id and nothing else, so a
+    repeated call is a repeated purchase. The unique key over
+    (order, provider, line_key) is the lock: fulfilment inserts a claim before
+    it spends money, and a retry hits the constraint instead of the supplier.
+
+    `state` records what became of the claim — see the Django model for why a
+    row stuck in "claimed" is never retried automatically.
+    """
+
+    __tablename__ = "orders_supplierpurchase"
+    __table_args__ = (
+        UniqueConstraint(
+            "order_id", "provider", "line_key", name="uniq_supplier_purchase_per_unit"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders_order.id"))
+    provider: Mapped[str] = mapped_column(String(20))
+    line_key: Mapped[str] = mapped_column(String(40))
+    package_code: Mapped[str] = mapped_column(String(120), default="")
+    state: Mapped[str] = mapped_column(String(10), default="claimed")
+    supplier_ref: Mapped[str] = mapped_column(String(120), default="")
+    iccid: Mapped[str] = mapped_column(String(32), default="")
+    note: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AtmosTransaction(Base):

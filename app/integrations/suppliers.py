@@ -29,21 +29,42 @@ from typing import TYPE_CHECKING, Protocol
 import structlog
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
+    from sqlalchemy.orm import Session
+
     from app.db.models import Order, Plan
 
 logger = structlog.get_logger(__name__)
 
 
 class SupplierError(RuntimeError):
-    """A wholesaler refused or failed to fulfil an order."""
+    """A wholesaler refused or failed to fulfil an order.
+
+    Means nothing was bought, so the caller is free to try the next supplier.
+    """
+
+
+class SupplierCommittedError(RuntimeError):
+    """Part of the order was bought and the rest was not.
+
+    Deliberately NOT a `SupplierError`: falling back to another wholesaler here
+    would buy the whole order a second time while the first purchase stands. The
+    only safe move is to stop and retry the same supplier, which the purchase
+    ledger makes cheap — the units already bought are skipped.
+    """
 
 
 @dataclass(frozen=True)
 class SupplierLine:
-    """One package to buy from a wholesaler, in that wholesaler's own code."""
+    """One package to buy from a wholesaler, in that wholesaler's own code.
+
+    `plan_id` is carried so a supplier without idempotency can name the
+    individual units it is about to buy; two lines of the same package in one
+    order would otherwise share a name and collide in the ledger.
+    """
 
     package_code: str
     quantity: int
+    plan_id: int = 0
 
 
 class Supplier(Protocol):
@@ -59,12 +80,27 @@ class Supplier(Protocol):
     def is_configured(self) -> bool:
         """True when credentials are present, so an unusable route is skipped."""
 
-    def place_order(self, *, transaction_id: str, lines: list[SupplierLine]) -> str:
-        """Buy the packages and return the supplier's own order reference.
+    def place_order(
+        self,
+        *,
+        db: Session,
+        order_id: int,
+        transaction_id: str,
+        lines: list[SupplierLine],
+    ) -> str:
+        """Buy the packages and return a reference to look them up by.
 
-        `transaction_id` must be derived from our order id so a retry is
-        deduplicated by the supplier rather than allocating a second set of
-        profiles we would pay for twice.
+        `transaction_id` is derived from our order id so a supplier that
+        deduplicates on it — eSIM Access does — refuses a retry instead of
+        allocating a second set of profiles we would pay for twice.
+
+        A supplier with no such key gets `db` and `order_id` so it can protect
+        itself through the purchase ledger. Suppliers that do not need them
+        ignore them; passing them unconditionally keeps the fallback loop from
+        having to know which kind of supplier it is talking to.
+
+        Raises `SupplierError` when nothing was bought, and `SupplierCommittedError`
+        when some of the order was.
         """
 
 
@@ -80,7 +116,16 @@ class EsimAccessSupplier:
         # and take down route selection for every order.
         return EsimAccessClient().is_configured
 
-    def place_order(self, *, transaction_id: str, lines: list[SupplierLine]) -> str:
+    def place_order(
+        self,
+        *,
+        db: Session,
+        order_id: int,
+        transaction_id: str,
+        lines: list[SupplierLine],
+    ) -> str:
+        # db/order_id unused: eSIM Access deduplicates on transaction_id itself,
+        # so it needs no ledger of ours.
         from app.integrations.esim_access import (
             EsimAccessClient,
             EsimAccessError,
@@ -105,12 +150,128 @@ class EsimAccessSupplier:
         return order_no
 
 
-# Registered suppliers, keyed as they appear in `Plan.provider`. eSIMCard is
-# absent until its API is connected: a plan sourced from an unregistered
-# supplier is reported loudly rather than skipped, because a paid order that
-# quietly goes unfulfilled is the failure nobody notices until a customer asks.
+class EsimCardSupplier:
+    """eSIMCard, bought one eSIM at a time behind the purchase ledger.
+
+    Three facts about their API decide the shape of this class.
+
+    Their purchase endpoint has **no idempotency key** — a `package_type_id` and
+    nothing else — so a repeated call buys a second eSIM at our expense. The
+    ledger claims each unit before the money moves, which turns a Celery retry
+    from an expensive accident into a no-op.
+
+    It buys **one eSIM per call**, so a line of quantity 3 is three purchases and
+    three chances to fail halfway. A half-bought order must never fall through to
+    another wholesaler — that would pay for the whole thing twice — hence
+    `SupplierCommittedError`.
+
+    A purchase **does not return the activation code**. It returns the eSIM's id;
+    the QR payload arrives later as `universal_link` in `/my-esims`. So this
+    method finishes with money spent and nothing to hand the customer yet, and
+    delivery is completed by `app.integrations.esimcard_sync`.
+
+    The returned reference is our own `transaction_id`: with one supplier id per
+    unit there is no single order number to record, and the ledger already holds
+    each one.
+    """
+
+    key = "esimcard"
+
+    def is_configured(self) -> bool:
+        from app.integrations.esimcard import EsimCardClient
+
+        return EsimCardClient().is_configured
+
+    def place_order(
+        self,
+        *,
+        db: Session,
+        order_id: int,
+        transaction_id: str,
+        lines: list[SupplierLine],
+    ) -> str:
+        from app.integrations.esimcard import (
+            EsimCardClient,
+            EsimCardError,
+            EsimCardPurchaseUncertainError,
+        )
+        from app.services import supplier_ledger as ledger
+
+        client = EsimCardClient()
+        bought = 0
+        pending: list[str] = []
+
+        for line in lines:
+            for line_key in ledger.line_keys(line.package_code, line.quantity, line.plan_id):
+                held = ledger.claim(
+                    db,
+                    order_id=order_id,
+                    provider=self.key,
+                    line_key=line_key,
+                    package_code=line.package_code,
+                )
+                if not held.ours:
+                    if held.existing_state == ledger.DONE:
+                        # An earlier attempt already bought this unit.
+                        bought += 1
+                        continue
+                    # Still claimed: an attempt reached the supplier and we do
+                    # not know the outcome. Counted as committed rather than
+                    # retried, because guessing wrong costs a real purchase.
+                    pending.append(line_key)
+                    continue
+
+                try:
+                    purchased = client.purchase(package_type_id=line.package_code)
+                except EsimCardPurchaseUncertainError as exc:
+                    # The claim stays "claimed" on purpose: it is the record
+                    # that money may have moved, and reconciliation resolves it.
+                    ledger.settle(db, held.row_id, state=ledger.CLAIMED, note=str(exc))
+                    db.commit()
+                    raise SupplierCommittedError(
+                        f"eSIMCard did not answer for {line_key}; "
+                        "outcome unknown, needs reconciliation"
+                    ) from exc
+                except EsimCardError as exc:
+                    ledger.settle(db, held.row_id, state=ledger.FAILED, note=str(exc))
+                    db.commit()
+                    if bought:
+                        raise SupplierCommittedError(
+                            f"eSIMCard bought {bought} of the order before refusing: {exc}"
+                        ) from exc
+                    # Nothing bought yet, so another wholesaler may still serve
+                    # the whole order.
+                    raise SupplierError(str(exc)) from exc
+
+                ledger.settle(
+                    db,
+                    held.row_id,
+                    state=ledger.DONE,
+                    supplier_ref=purchased.supplier_id,
+                    iccid=purchased.iccid,
+                    note="" if purchased.applied else purchased.message,
+                )
+                db.commit()
+                bought += 1
+
+        if pending:
+            raise SupplierCommittedError(
+                f"{len(pending)} unit(s) of order {order_id} are unresolved at eSIMCard"
+            )
+        if not bought:
+            raise SupplierError("no purchasable units in the order")
+        return transaction_id
+
+
+# Registered suppliers, keyed as they appear in `Plan.provider`. A plan sourced
+# from an unregistered supplier is reported loudly rather than skipped, because a
+# paid order that quietly goes unfulfilled is the failure nobody notices until a
+# customer asks. Being registered is not enough to be used: `is_configured()`
+# must also find credentials, and Django's FULFILLABLE_PROVIDERS gates whether
+# the admin will route to it at all.
 _SUPPLIERS: dict[str, Supplier] = {
     EsimAccessSupplier.key: EsimAccessSupplier(),
+    EsimCardSupplier.key: EsimCardSupplier(),
 }
 
 
@@ -178,7 +339,11 @@ def routes_for(order: Order) -> list[Route]:
             if offer is None:  # pragma: no cover - excluded by the intersection
                 break
             code, cost = offer
-            lines.append(SupplierLine(package_code=code, quantity=item.quantity))
+            lines.append(
+                SupplierLine(
+                    package_code=code, quantity=item.quantity, plan_id=item.plan.id
+                )
+            )
             total += cost * item.quantity
         else:
             routes.append(

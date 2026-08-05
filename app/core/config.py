@@ -117,6 +117,14 @@ class Settings(BaseSettings):
     esimaccess_webhook_token: str = ""
     esimaccess_timeout_seconds: int = 20
 
+    # eSIMCard, the second wholesaler. The base URL is NOT esimcard.com: that
+    # host now answers every API path with HTTP 410 "API moved to
+    # portal.esimcard.com", which a client checking only the response body would
+    # read as a normal failure and retry forever.
+    esimcard_base_url: str = "https://portal.esimcard.com/api/developer/reseller"
+    esimcard_api_token: str = ""
+    esimcard_timeout_seconds: int = 30
+
     cbu_currency_url: str = "https://cbu.uz/uz/arkhiv-kursov-valyut/json/"
     uzs_per_usd_fallback: float = 12000.0
 

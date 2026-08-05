@@ -28,6 +28,7 @@ from app.db.models.orders import (
     Payment,
     PaymeTransaction,
     PromoCode,
+    SupplierPurchase,
 )
 
 __all__ = [
@@ -58,5 +59,6 @@ __all__ = [
     "Region",
     "SocialAccount",
     "SupplierOffer",
+    "SupplierPurchase",
     "Testimonial",
 ]

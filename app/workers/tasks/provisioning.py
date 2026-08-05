@@ -43,10 +43,17 @@ def synchronise_supplier_order(self: Task, order_id: int) -> int:
             return 0
         if not order.provider_order_no:
             return 0
-        if order.provider != "esimaccess":
-            # Profile polling is supplier-specific and only eSIM Access has it.
-            # An order routed elsewhere has been paid for and placed, so silence
-            # here would mean a customer waiting on an eSIM nobody is fetching.
+        # Profile polling is supplier-specific: each wholesaler hands profiles
+        # over in its own shape and on its own schedule. An order routed to a
+        # supplier with no sync has been paid for and placed, so silence here
+        # would mean a customer waiting on an eSIM nobody is fetching.
+        if order.provider == "esimaccess":
+            from app.integrations.esim_access import EsimAccessError as SupplierSyncError
+            from app.integrations.esim_access import sync_order_profiles
+        elif order.provider == "esimcard":
+            from app.integrations.esimcard import EsimCardError as SupplierSyncError
+            from app.integrations.esimcard_sync import sync_order_profiles
+        else:
             logger.error(
                 "provisioning.no_sync_for_provider",
                 order_id=order_id,
@@ -55,11 +62,9 @@ def synchronise_supplier_order(self: Task, order_id: int) -> int:
             )
             return 0
 
-        from app.integrations.esim_access import EsimAccessError, sync_order_profiles
-
         try:
             count = sync_order_profiles(session, order)
-        except EsimAccessError as exc:
+        except SupplierSyncError as exc:
             logger.warning(
                 "provisioning.supplier_error",
                 order_id=order_id,
@@ -221,7 +226,7 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
     genuine outage rather than a single supplier having a bad minute.
     """
     from app.core.config import settings
-    from app.integrations.suppliers import SupplierError, usable_routes_for
+    from app.integrations.suppliers import SupplierCommittedError, SupplierError, usable_routes_for
 
     if not settings.supplier_calls_enabled:
         logger.info("fulfil.supplier_skipped", order_id=order_id, provider="mock")
@@ -233,6 +238,22 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
             return False
 
         routes = usable_routes_for(order)
+
+        # Once a wholesaler has been paid for part of this order, it is the only
+        # candidate. Cheapest-first is the right rule for a fresh order and the
+        # wrong one for a retry: the ledger stops eSIMCard from being charged
+        # twice, but nothing stops a *different* supplier from selling us the
+        # whole order again, and after a rollback `order.provider` cannot be
+        # trusted to remember where the money went.
+        pinned = _pinned_provider(session, order_id)
+        if pinned:
+            routes = [route for route in routes if route.provider == pinned]
+            if not routes:
+                logger.error(
+                    "fulfil.pinned_provider_unusable", order_id=order_id, provider=pinned
+                )
+                return False
+
         if not routes:
             # Either nothing is mapped to a supplier, or a mixed cart has no
             # single supplier able to cover every line. Both leave a paid order
@@ -251,8 +272,25 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
                 continue
             try:
                 order_no = supplier.place_order(
-                    transaction_id=f"qs-{order_id}", lines=list(route.lines)
+                    db=session,
+                    order_id=order_id,
+                    transaction_id=f"qs-{order_id}",
+                    lines=list(route.lines),
                 )
+            except SupplierCommittedError as exc:
+                # Part of the order is already bought. Trying the next supplier
+                # would buy the whole order again, so the only safe move is to
+                # stop; the purchase ledger makes the Celery retry skip whatever
+                # was already paid for, and `_pinned_provider` keeps that retry
+                # at this supplier instead of letting a cheaper one win again.
+                logger.error(
+                    "fulfil.supplier_partially_committed",
+                    order_id=order_id,
+                    provider=route.provider,
+                    attempt=attempt,
+                    error=str(exc),
+                )
+                raise
             except SupplierError as exc:
                 last_error = exc
                 logger.warning(
@@ -283,6 +321,26 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
         if last_error is not None:
             raise last_error
         return False
+
+
+def _pinned_provider(session: object, order_id: int) -> str | None:
+    """The wholesaler that already holds purchases for this order, if any.
+
+    Anything other than a clean refusal counts: a "claimed" row means money may
+    have moved, and treating "may" as "did not" is how an order gets bought
+    twice.
+    """
+    from app.db.models import SupplierPurchase
+
+    row = (
+        session.query(SupplierPurchase)  # type: ignore[attr-defined]
+        .filter(
+            SupplierPurchase.order_id == order_id,
+            SupplierPurchase.state != "failed",
+        )
+        .first()
+    )
+    return row.provider if row else None
 
 
 def get_supplier_or_none(provider: str) -> Supplier | None:

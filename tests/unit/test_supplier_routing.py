@@ -32,6 +32,9 @@ class FakeOffer:
 
 @dataclass
 class FakePlan:
+    # Carried onto every SupplierLine so a supplier without idempotency can name
+    # the individual units it is about to buy.
+    id: int = 1
     provider: str = "mock"
     provider_package_code: str = ""
     cost_usd: Decimal | None = None
@@ -79,7 +82,9 @@ class TestRouteSelection:
 
         # Ordering the right price against the wrong code would deliver the
         # wrong eSIM, so the code has to travel with the route.
-        assert routes[0].lines == (SupplierLine(package_code="tur-5gb-30d", quantity=1),)
+        assert routes[0].lines == (
+        SupplierLine(package_code="tur-5gb-30d", quantity=1, plan_id=1),
+    )
 
     def test_unavailable_offer_is_not_a_route(self):
         plan = FakePlan(
@@ -153,7 +158,7 @@ class TestUsableRoutes:
             def is_configured(self):
                 return True
 
-            def place_order(self, *, transaction_id, lines):  # pragma: no cover
+            def place_order(self, *, db, order_id, transaction_id, lines):  # pragma: no cover
                 return "n/a"
 
         register_supplier(ConfiguredAccess())
@@ -173,7 +178,7 @@ class TestUsableRoutes:
             def is_configured(self):
                 return False
 
-            def place_order(self, *, transaction_id, lines):  # pragma: no cover
+            def place_order(self, *, db, order_id, transaction_id, lines):  # pragma: no cover
                 return "n/a"
 
         register_supplier(Unconfigured())
@@ -182,10 +187,24 @@ class TestUsableRoutes:
         finally:
             register_supplier(_real_esimaccess)
 
-    def test_esimcard_is_not_registered_yet(self):
-        # Guards against a placeholder client being wired up by accident: an
-        # order routed to a stub would be marked ORDERED with nothing bought.
-        assert get_supplier("esimcard") is None
+    def test_esimcard_is_registered_but_unused_without_a_token(self, monkeypatch):
+        # Registration alone must not route orders to it: an order sent to a
+        # supplier we cannot authenticate against would be marked ORDERED with
+        # nothing bought.
+        from app.core.config import settings
+
+        assert get_supplier("esimcard") is not None
+        monkeypatch.setattr(settings, "esimcard_api_token", "")
+        plan = FakePlan(offers=[offer("esimcard", "1.00")])
+        assert usable_routes_for(FakeOrder([FakeItem(plan)])) == []
+
+    def test_esimcard_becomes_usable_once_its_token_is_set(self, monkeypatch):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "esimcard_api_token", "1241694|token")
+        plan = FakePlan(offers=[offer("esimcard", "1.00")])
+        usable = usable_routes_for(FakeOrder([FakeItem(plan)]))
+        assert [route.provider for route in usable] == ["esimcard"]
 
 
 _real_esimaccess = get_supplier("esimaccess")
@@ -203,7 +222,7 @@ class TestSupplierErrorContract:
 
         with pytest.raises(SupplierError, match="supplier down"):
             suppliers.EsimAccessSupplier().place_order(
-                transaction_id="qs-1", lines=[SupplierLine("TR_5_30", 1)]
+                db=None, order_id=1, transaction_id="qs-1", lines=[SupplierLine("TR_5_30", 1)]
             )
 
     def test_accepted_order_without_a_reference_is_a_failure(self, monkeypatch):
@@ -219,7 +238,7 @@ class TestSupplierErrorContract:
         # nothing, so this must fail loudly and let the fallback run.
         with pytest.raises(SupplierError, match="no order number"):
             suppliers.EsimAccessSupplier().place_order(
-                transaction_id="qs-1", lines=[SupplierLine("TR_5_30", 1)]
+                db=None, order_id=1, transaction_id="qs-1", lines=[SupplierLine("TR_5_30", 1)]
             )
 
 
