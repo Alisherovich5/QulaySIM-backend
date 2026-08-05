@@ -57,14 +57,15 @@ class SupplierCommittedError(RuntimeError):
 class SupplierLine:
     """One package to buy from a wholesaler, in that wholesaler's own code.
 
-    `plan_id` is carried so a supplier without idempotency can name the
-    individual units it is about to buy; two lines of the same package in one
-    order would otherwise share a name and collide in the ledger.
+    `item_id` is carried so a supplier without idempotency can name the
+    individual units it is about to buy. The order item's id and not the plan's:
+    it is unique by construction, so two lines of the same plan in one order
+    cannot share a name and silently claim each other's units.
     """
 
     package_code: str
     quantity: int
-    plan_id: int = 0
+    item_id: int = 0
 
 
 class Supplier(Protocol):
@@ -202,7 +203,7 @@ class EsimCardSupplier:
         pending: list[str] = []
 
         for line in lines:
-            for line_key in ledger.line_keys(line.package_code, line.quantity, line.plan_id):
+            for line_key in ledger.line_keys(line.quantity, line.item_id):
                 held = ledger.claim(
                     db,
                     order_id=order_id,
@@ -340,9 +341,7 @@ def routes_for(order: Order) -> list[Route]:
                 break
             code, cost = offer
             lines.append(
-                SupplierLine(
-                    package_code=code, quantity=item.quantity, plan_id=item.plan.id
-                )
+                SupplierLine(package_code=code, quantity=item.quantity, item_id=item.id)
             )
             total += cost * item.quantity
         else:

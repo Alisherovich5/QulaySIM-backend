@@ -56,14 +56,19 @@ class Claim:
     existing_ref: str = ""
 
 
-def line_keys(package_code: str, quantity: int, plan_id: int) -> list[str]:
+def line_keys(quantity: int, item_id: int) -> list[str]:
     """Stable names for the individual units of one order line.
 
-    Includes the plan id so two lines of the same package in one order — which
-    the cart permits — do not collide, and stays identical across retries, which
-    is the whole point.
+    Keyed on the order *item* id rather than the plan or the package code. The
+    item id is unique by construction, so two lines of the same plan in one
+    order cannot collide — and it is short, which the package code is not: an
+    eSIMCard code is a 36-character UUID, and a key built from one overflowed
+    this column's 40 characters on the first real order. SQLite does not enforce
+    varchar limits, so only Postgres caught it.
+
+    Identical across retries, which is the whole point.
     """
-    return [f"{plan_id}:{package_code}:{index}" for index in range(1, quantity + 1)]
+    return [f"{item_id}:{index}" for index in range(1, quantity + 1)]
 
 
 def claim(db: Session, *, order_id: int, provider: str, line_key: str, package_code: str) -> Claim:

@@ -32,8 +32,6 @@ class FakeOffer:
 
 @dataclass
 class FakePlan:
-    # Carried onto every SupplierLine so a supplier without idempotency can name
-    # the individual units it is about to buy.
     id: int = 1
     provider: str = "mock"
     provider_package_code: str = ""
@@ -46,6 +44,9 @@ class FakeItem:
     plan: FakePlan
     quantity: int = 1
     plan_id: int = 1
+    # Carried onto every SupplierLine so a supplier without idempotency can name
+    # the individual units it is about to buy without them colliding.
+    id: int = 1
 
 
 @dataclass
@@ -83,8 +84,8 @@ class TestRouteSelection:
         # Ordering the right price against the wrong code would deliver the
         # wrong eSIM, so the code has to travel with the route.
         assert routes[0].lines == (
-        SupplierLine(package_code="tur-5gb-30d", quantity=1, plan_id=1),
-    )
+            SupplierLine(package_code="tur-5gb-30d", quantity=1, item_id=1),
+        )
 
     def test_unavailable_offer_is_not_a_route(self):
         plan = FakePlan(

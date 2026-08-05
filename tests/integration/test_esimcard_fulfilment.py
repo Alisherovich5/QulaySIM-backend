@@ -57,6 +57,7 @@ def session_factory():
 
 
 def _order(factory, *, quantity: int = 1) -> tuple[int, int]:
+    """Returns (order id, order item id)."""
     with factory() as session:
         customer = Customer(email="buy@example.com")
         session.add(customer)
@@ -86,16 +87,15 @@ def _order(factory, *, quantity: int = 1) -> tuple[int, int]:
         order = Order(customer_id=customer.id, amount_uzs=Decimal("60000"), provider="esimcard")
         session.add(order)
         session.flush()
-        session.add(
-            OrderItem(
-                order_id=order.id,
-                plan_id=plan.id,
-                quantity=quantity,
-                unit_price=Decimal("5.00"),
-            )
+        item = OrderItem(
+            order_id=order.id,
+            plan_id=plan.id,
+            quantity=quantity,
+            unit_price=Decimal("5.00"),
         )
+        session.add(item)
         session.commit()
-        return order.id, plan.id
+        return order.id, item.id
 
 
 class Recorder:
@@ -179,9 +179,9 @@ def _place(factory, order_id: int, recorder: Recorder, *, lines: list[SupplierLi
 
 class TestRetriesDoNotBuyTwice:
     def test_the_second_attempt_buys_nothing(self, session_factory):
-        order_id, plan_id = _order(session_factory)
+        order_id, item_id = _order(session_factory)
         recorder = Recorder()
-        lines = [SupplierLine(package_code=PACKAGE, quantity=1, plan_id=plan_id)]
+        lines = [SupplierLine(package_code=PACKAGE, quantity=1, item_id=item_id)]
 
         first = _place(session_factory, order_id, recorder, lines=lines)
         second = _place(session_factory, order_id, recorder, lines=lines)
@@ -196,17 +196,17 @@ class TestRetriesDoNotBuyTwice:
         assert rows[0].supplier_ref == "sim-1"
 
     def test_five_retries_still_buy_one(self, session_factory):
-        order_id, plan_id = _order(session_factory)
+        order_id, item_id = _order(session_factory)
         recorder = Recorder()
-        lines = [SupplierLine(package_code=PACKAGE, quantity=1, plan_id=plan_id)]
+        lines = [SupplierLine(package_code=PACKAGE, quantity=1, item_id=item_id)]
         for _ in range(5):
             _place(session_factory, order_id, recorder, lines=lines)
         assert len(recorder.purchases) == 1
 
     def test_a_quantity_of_three_buys_exactly_three_across_retries(self, session_factory):
-        order_id, plan_id = _order(session_factory, quantity=3)
+        order_id, item_id = _order(session_factory, quantity=3)
         recorder = Recorder()
-        lines = [SupplierLine(package_code=PACKAGE, quantity=3, plan_id=plan_id)]
+        lines = [SupplierLine(package_code=PACKAGE, quantity=3, item_id=item_id)]
 
         _place(session_factory, order_id, recorder, lines=lines)
         _place(session_factory, order_id, recorder, lines=lines)
@@ -216,19 +216,44 @@ class TestRetriesDoNotBuyTwice:
             rows = session.execute(select(SupplierPurchase)).scalars().all()
         assert len(rows) == 3
         assert {row.line_key for row in rows} == {
-            f"{plan_id}:{PACKAGE}:1",
-            f"{plan_id}:{PACKAGE}:2",
-            f"{plan_id}:{PACKAGE}:3",
+            f"{item_id}:1",
+            f"{item_id}:2",
+            f"{item_id}:3",
         }
+
+
+class TestTheKeyFitsItsColumn:
+    """The bug SQLite cannot catch.
+
+    line_key is varchar(40) in Postgres. The first version of this key embedded
+    the package code, and an eSIMCard code is a 36-character UUID — so the very
+    first real order raised StringDataRightTruncation in production while every
+    test here passed, because SQLite ignores varchar limits.
+
+    Asserting against the column's own declared length rather than a hardcoded
+    40, so widening the column cannot leave this test lying.
+    """
+
+    def test_a_uuid_package_and_a_large_item_id_still_fit(self):
+        limit = SupplierPurchase.__table__.c.line_key.type.length
+        keys = ledger.line_keys(99, item_id=2_147_483_647)
+        longest = max(len(key) for key in keys)
+        assert longest <= limit, f"line_key needs {longest} chars, column holds {limit}"
+
+    def test_the_package_code_is_not_in_the_key(self):
+        # It lives in its own column. Putting it in the key is what overflowed.
+        (key,) = ledger.line_keys(1, item_id=7)
+        assert PACKAGE not in key
+        assert key == "7:1"
 
 
 class TestPartialFailure:
     def test_a_refusal_on_the_second_unit_stops_the_order_leaving_the_first_bought(
         self, session_factory
     ):
-        order_id, plan_id = _order(session_factory, quantity=2)
+        order_id, item_id = _order(session_factory, quantity=2)
         recorder = Recorder(script=["ok", "refuse"])
-        lines = [SupplierLine(package_code=PACKAGE, quantity=2, plan_id=plan_id)]
+        lines = [SupplierLine(package_code=PACKAGE, quantity=2, item_id=item_id)]
 
         # SupplierCommittedError, not SupplierError: falling back to another
         # wholesaler here would pay for both units a second time.
@@ -241,13 +266,13 @@ class TestPartialFailure:
                 r.line_key: r.state
                 for r in session.execute(select(SupplierPurchase)).scalars()
             }
-        assert rows[f"{plan_id}:{PACKAGE}:1"] == ledger.DONE
-        assert rows[f"{plan_id}:{PACKAGE}:2"] == ledger.FAILED
+        assert rows[f"{item_id}:1"] == ledger.DONE
+        assert rows[f"{item_id}:2"] == ledger.FAILED
 
     def test_the_retry_buys_only_the_missing_unit(self, session_factory):
-        order_id, plan_id = _order(session_factory, quantity=2)
+        order_id, item_id = _order(session_factory, quantity=2)
         recorder = Recorder(script=["ok", "refuse"])
-        lines = [SupplierLine(package_code=PACKAGE, quantity=2, plan_id=plan_id)]
+        lines = [SupplierLine(package_code=PACKAGE, quantity=2, item_id=item_id)]
         with pytest.raises(SupplierCommittedError):
             _place(session_factory, order_id, recorder, lines=lines)
 
@@ -260,9 +285,9 @@ class TestPartialFailure:
         assert states == [ledger.DONE, ledger.DONE]
 
     def test_a_refusal_on_the_first_unit_stays_retryable_elsewhere(self, session_factory):
-        order_id, plan_id = _order(session_factory)
+        order_id, item_id = _order(session_factory)
         recorder = Recorder(script=["refuse"])
-        lines = [SupplierLine(package_code=PACKAGE, quantity=1, plan_id=plan_id)]
+        lines = [SupplierLine(package_code=PACKAGE, quantity=1, item_id=item_id)]
         # Nothing bought, so another wholesaler may still serve the whole order.
         with pytest.raises(SupplierError):
             _place(session_factory, order_id, recorder, lines=lines)
@@ -272,9 +297,9 @@ class TestUncertainOutcome:
     def test_a_timeout_leaves_the_claim_held_and_is_never_retried_automatically(
         self, session_factory
     ):
-        order_id, plan_id = _order(session_factory)
+        order_id, item_id = _order(session_factory)
         recorder = Recorder(script=["timeout"])
-        lines = [SupplierLine(package_code=PACKAGE, quantity=1, plan_id=plan_id)]
+        lines = [SupplierLine(package_code=PACKAGE, quantity=1, item_id=item_id)]
 
         with pytest.raises(SupplierCommittedError, match="reconciliation"):
             _place(session_factory, order_id, recorder, lines=lines)
@@ -294,13 +319,13 @@ class TestDelivery:
     def test_a_bought_esim_becomes_an_installable_profile(self, session_factory):
         from app.integrations import esimcard_sync
 
-        order_id, plan_id = _order(session_factory)
+        order_id, item_id = _order(session_factory)
         recorder = Recorder()
         _place(
             session_factory,
             order_id,
             recorder,
-            lines=[SupplierLine(package_code=PACKAGE, quantity=1, plan_id=plan_id)],
+            lines=[SupplierLine(package_code=PACKAGE, quantity=1, item_id=item_id)],
         )
 
         with session_factory() as session:
@@ -316,18 +341,18 @@ class TestDelivery:
         assert esim.qr_payload == "LPA:1$rsp.example.com$sim-1"
         assert esim.qr_image.startswith("data:image/")
         assert esim.status == "active"
-        assert esim.plan_id == plan_id
+        assert esim.plan_id == session.get(OrderItem, item_id).plan_id
 
     def test_syncing_twice_refreshes_rather_than_duplicates(self, session_factory):
         from app.integrations import esimcard_sync
 
-        order_id, plan_id = _order(session_factory)
+        order_id, item_id = _order(session_factory)
         recorder = Recorder()
         _place(
             session_factory,
             order_id,
             recorder,
-            lines=[SupplierLine(package_code=PACKAGE, quantity=1, plan_id=plan_id)],
+            lines=[SupplierLine(package_code=PACKAGE, quantity=1, item_id=item_id)],
         )
         for _ in range(2):
             with session_factory() as session:
@@ -341,13 +366,13 @@ class TestDelivery:
     ):
         from app.integrations import esimcard_sync
 
-        order_id, plan_id = _order(session_factory)
+        order_id, item_id = _order(session_factory)
         recorder = Recorder(script=["delayed"])
         _place(
             session_factory,
             order_id,
             recorder,
-            lines=[SupplierLine(package_code=PACKAGE, quantity=1, plan_id=plan_id)],
+            lines=[SupplierLine(package_code=PACKAGE, quantity=1, item_id=item_id)],
         )
 
         with session_factory() as session:

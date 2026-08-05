@@ -62,6 +62,16 @@ def _local_status(supplier_status: str) -> str:
     return _STATUS_MAP.get(supplier_status.strip().lower(), "pending")
 
 
+def _plan_for(row, items_by_id: dict, plans_by_code: dict):
+    """The plan this purchase was for, by item id, falling back to the code."""
+    item_id, _, _ = row.line_key.partition(":")
+    if item_id.isdigit():
+        item = items_by_id.get(int(item_id))
+        if item is not None and item.plan is not None:
+            return item.plan
+    return plans_by_code.get(row.package_code)
+
+
 def sync_order_profiles(db: Session, order: Order, client: EsimCardClient | None = None) -> int:
     """Fetch the eSIMs this order bought and upsert them as customer profiles.
 
@@ -98,24 +108,29 @@ def sync_order_profiles(db: Session, order: Order, client: EsimCardClient | None
             .filter(Order.id == order.id)
             .one()
         )
-    plans = {
+    # `line_key` is "<order item id>:<n>", so the plan comes back exactly rather
+    # than by matching package codes — two plans sharing one supplier code would
+    # otherwise be a coin toss, and the wrong plan means the wrong allowance and
+    # the wrong expiry on the customer's screen.
+    items_by_id = {item.id: item for item in order.items}
+    # Kept as a fallback for rows written before the key carried the item id.
+    plans_by_code = {
         offer.package_code: item.plan
         for item in order.items
         if item.plan is not None
         for offer in item.plan.offers
         if offer.provider == "esimcard"
     }
-    # Plans that predate supplier offers still name a code directly.
     for item in order.items:
         if item.plan is not None and item.plan.provider_package_code:
-            plans.setdefault(item.plan.provider_package_code, item.plan)
+            plans_by_code.setdefault(item.plan.provider_package_code, item.plan)
 
     remote = (client or EsimCardClient()).find_esims({row.supplier_ref for row in done})
     touched = 0
 
     for row in done:
         profile: RemoteEsim | None = remote.get(row.supplier_ref)
-        plan = plans.get(row.package_code)
+        plan = _plan_for(row, items_by_id, plans_by_code)
         if profile is None:
             # Bought, but not yet listed. Expected for a delayed purchase.
             logger.info(
