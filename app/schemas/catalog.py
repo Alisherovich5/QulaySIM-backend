@@ -39,6 +39,21 @@ class CountryDetailOut(CountryOut):
     plans: list[PlanOut] = []
 
 
+class RegionDetailOut(RegionOut):
+    """A region and the multi-country eSIMs sold for it.
+
+    `country_count` is the reason to buy one: "Yevropa 5 GB" tells a customer
+    nothing about whether their stop is covered, and "41 countries" tells them
+    everything. It counts the destinations we sell in the region, which is the
+    honest number to show — the underlying package may cover more, but those are
+    countries we cannot otherwise sell them anyway.
+    """
+
+    plans: list[PlanOut] = []
+    starting_price: Money | None = None
+    country_count: int = 0
+
+
 class PopularPlanOut(PlanOut):
     """A plan with enough of its destination attached to stand on its own.
 

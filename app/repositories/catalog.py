@@ -95,6 +95,22 @@ async def count_countries(session: AsyncSession) -> int:
     return int(result.scalar_one())
 
 
+async def get_region_by_slug(session: AsyncSession, slug: str) -> Region | None:
+    """A region with its multi-country plans and its destination count.
+
+    `Region.plans` is the multi-country side — plans with a region and no
+    country. Countries are loaded too, because how many destinations a region
+    covers is the headline number on the page.
+    """
+    stmt = (
+        select(Region)
+        .options(selectinload(Region.plans), selectinload(Region.countries))
+        .where(Region.slug == slug)
+    )
+    result = await session.execute(stmt)
+    return result.scalars().first()
+
+
 async def get_country_by_slug(session: AsyncSession, slug: str) -> Country | None:
     stmt = (
         select(Country)

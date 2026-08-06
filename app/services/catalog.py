@@ -25,6 +25,7 @@ from app.schemas.catalog import (
     CountryOut,
     PlanOut,
     PopularPlanOut,
+    RegionDetailOut,
     RegionOut,
 )
 
@@ -118,6 +119,35 @@ async def get_country(
 
     return await get_or_set(
         cache_key("country", slug=slug, lang=language), settings.cache_ttl_catalog, produce
+    )
+
+
+async def get_region(
+    session: AsyncSession, slug: str, language: str = DEFAULT_LANGUAGE
+) -> JSONDict:
+    """One region with the multi-country eSIMs sold for it.
+
+    The counterpart of get_country, for the product a traveller doing three
+    countries actually wants. Same shape on purpose, so the storefront renders a
+    region page with the component it already has for a destination.
+    """
+    async def produce() -> JSONDict:
+        region = await repo.get_region_by_slug(session, slug)
+        if region is None:
+            raise NotFoundError("Region not found")
+        active = sorted(
+            (p for p in region.plans if p.is_active),
+            key=lambda p: (p.sort_order, p.price_usd),
+        )
+        detail = RegionDetailOut.model_validate(region)
+        detail.name = localise(region, "name", language)
+        detail.plans = [PlanOut.model_validate(p) for p in active]
+        detail.starting_price = min((p.price_usd for p in active), default=None)
+        detail.country_count = sum(1 for c in region.countries if c.is_active)
+        return detail.model_dump(mode="json")
+
+    return await get_or_set(
+        cache_key("region", slug=slug, lang=language), settings.cache_ttl_catalog, produce
     )
 
 

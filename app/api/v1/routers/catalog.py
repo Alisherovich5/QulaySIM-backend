@@ -49,6 +49,16 @@ async def country_detail(
     return await service.get_country(session, slug, language)
 
 
+@router.get("/regions/{slug}")
+async def region_detail(
+    slug: str,
+    session: SessionDep,
+    language: Annotated[str, Depends(language_from)],
+) -> JSONDict:
+    """A region and its multi-country eSIMs."""
+    return await service.get_region(session, slug, language)
+
+
 @router.get("/plans/popular")
 async def popular_plans(
     session: SessionDep,

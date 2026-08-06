@@ -76,7 +76,7 @@ async def place_order(
 
     # Price server-side: the cart came from the customer's browser and its
     # prices may be stale or tampered with.
-    quote = await price_cart(session, items, promo_code)
+    quote = await price_cart(session, items, promo_code, customer_id=customer.id)
 
     amount_uzs, rate = await _freeze_som_amount(quote.total)
     if amount_uzs < MIN_CHARGEABLE_UZS:

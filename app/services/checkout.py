@@ -60,7 +60,16 @@ async def price_cart(
     session: AsyncSession,
     items: list[CartItemIn],
     promo_code: str | None,
+    *,
+    customer_id: int | None = None,
 ) -> Quote:
+    """Price a cart server-side.
+
+    `customer_id` is what makes a personal reward personal: cashback codes are
+    bound to whoever earned them, and without it the quote endpoint would happily
+    apply somebody else's code. Optional because an anonymous visitor can still
+    price a cart — they just cannot redeem a bound code.
+    """
     # One query for the whole cart rather than one per line.
     plans = await catalog_repo.get_active_plans(session, [i.plan_id for i in items])
 
@@ -91,7 +100,11 @@ async def price_cart(
             )
         )
 
-    promo = await order_repo.get_promo_by_code(session, promo_code) if promo_code else None
+    promo = (
+        await order_repo.get_promo_by_code(session, promo_code, customer_id=customer_id)
+        if promo_code
+        else None
+    )
 
     try:
         return build_quote(lines, _to_rule(promo), promo_requested=bool(promo_code))

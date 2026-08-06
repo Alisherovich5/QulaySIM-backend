@@ -138,6 +138,20 @@ class Settings(BaseSettings):
     esimcard_api_token: str = ""
     esimcard_timeout_seconds: int = 30
 
+    # --- Cashback ------------------------------------------------------------
+    # Repeat-purchase cashback: from the customer's second paid order onward, a
+    # single-use code worth this percentage of the order is issued to them.
+    #
+    # Set to 0 to switch the scheme off. Kept as settings rather than hardcoded
+    # because it is a marketing lever the business will want to move, and moving
+    # it should not need a deploy of new logic — only a restart.
+    loyalty_cashback_percent: int = 5
+    # Which paid order first earns it. 2 means "every purchase after the first".
+    loyalty_cashback_from_order: int = 2
+    # How long the customer has to spend it. A reward with no expiry is a
+    # liability that never ages off the books.
+    loyalty_cashback_valid_days: int = 90
+
     cbu_currency_url: str = "https://cbu.uz/uz/arkhiv-kursov-valyut/json/"
     uzs_per_usd_fallback: float = 12000.0
 

@@ -58,9 +58,27 @@ async def lock_promo_by_code(session: AsyncSession, code: str) -> PromoCode | No
     return result.scalars().first()
 
 
-async def get_promo_by_code(session: AsyncSession, code: str) -> PromoCode | None:
+async def get_promo_by_code(
+    session: AsyncSession, code: str, *, customer_id: int | None = None
+) -> PromoCode | None:
+    """Look up a promo code, honouring who it was issued to.
+
+    A code with `issued_to_id` belongs to one customer — cashback is earned by a
+    person, and referral and loyalty rewards are both minted that way. Returning
+    it to anyone who types it would turn a personal reward into a public
+    discount the moment somebody pastes it into a group chat.
+
+    Returns None rather than raising, so the caller reports "unknown code"
+    exactly as it would for a typo. Telling a stranger that a code is real but
+    belongs to someone else is an invitation to keep guessing.
+    """
     result = await session.execute(select(PromoCode).where(PromoCode.code == code.strip().upper()))
-    return result.scalars().first()
+    promo = result.scalars().first()
+    if promo is None:
+        return None
+    if promo.issued_to_id is not None and promo.issued_to_id != customer_id:
+        return None
+    return promo
 
 
 async def count_paid_orders(session: AsyncSession, customer_id: int) -> int:

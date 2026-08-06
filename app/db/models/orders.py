@@ -33,6 +33,14 @@ class PromoCode(Base):
     used_count: Mapped[int] = mapped_column(Integer, default=0)
     valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Why the code exists. Cashback codes are minted by the worker, never typed.
+    reason: Mapped[str] = mapped_column(String(10), default="manual")
+    # When set, only this customer may redeem it. Cashback is earned by a person;
+    # an unbound code posted in a group chat discounts everyone's order, which is
+    # how a loyalty scheme turns into a site-wide sale nobody approved.
+    issued_to_id: Mapped[int | None] = mapped_column(
+        ForeignKey("customers_customer.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

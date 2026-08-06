@@ -20,6 +20,12 @@ class Region(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     countries: Mapped[list[Country]] = relationship(back_populates="region")
+    # Multi-country tariffs — a "Europe, 41 countries" eSIM belongs to a region
+    # and to no country. Both foreign keys point at catalog_region, so the join
+    # has to be spelled out or SQLAlchemy cannot tell which one this is.
+    plans: Mapped[list[Plan]] = relationship(
+        "Plan", primaryjoin="Region.id == foreign(Plan.region_id)", viewonly=True
+    )
 
 
 class Country(Base):

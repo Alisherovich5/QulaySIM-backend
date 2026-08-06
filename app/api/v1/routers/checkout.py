@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.api.deps import CurrentCustomer, SessionDep
+from app.api.deps import CurrentCustomer, OptionalCustomer, SessionDep
 from app.schemas.commerce import (
     OrderPlacedOut,
     QuoteIn,
@@ -16,8 +16,17 @@ router = APIRouter(prefix="/api/checkout", tags=["checkout"])
 
 
 @router.post("/quote", response_model=QuoteOut)
-async def quote(payload: QuoteIn, session: SessionDep) -> QuoteOut:
-    result = await service.price_cart(session, payload.items, payload.promo_code)
+async def quote(
+    payload: QuoteIn, session: SessionDep, customer: OptionalCustomer
+) -> QuoteOut:
+    result = await service.price_cart(
+        session,
+        payload.items,
+        payload.promo_code,
+        # A cashback code is bound to whoever earned it. Without this the quote
+        # would apply someone else's reward to an anonymous cart.
+        customer_id=customer.id if customer else None,
+    )
     return QuoteOut(
         subtotal=result.subtotal,
         discount=result.discount,

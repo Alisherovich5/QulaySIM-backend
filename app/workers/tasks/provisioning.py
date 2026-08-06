@@ -6,6 +6,7 @@ worker retry instead of a blocked API worker.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from celery import Task
@@ -75,6 +76,96 @@ def synchronise_supplier_order(self: Task, order_id: int) -> int:
 
     logger.info("provisioning.synchronised", order_id=order_id, profiles=count)
     return count
+
+
+@celery_app.task(
+    name="provisioning.grant_loyalty_cashback",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    max_retries=5,
+)
+def grant_loyalty_cashback(customer_id: int, order_id: int) -> str | None:
+    """Cashback for coming back — a single-use code from the second order on.
+
+    Earned per order, so a customer who buys five times gets four codes. The
+    percentage, the qualifying order and the expiry are all settings, because
+    they are marketing levers the business will move and moving them should not
+    need new logic.
+
+    Two things keep it from paying twice for the same purchase. The code carries
+    the order id, and the unique constraint on `PromoCode.code` means a retried
+    task collides instead of minting a second reward — the same trick the ATMOS
+    callback uses. And the code is bound to the customer who earned it, so it
+    cannot be passed around; an unbound reward posted in a group chat is a
+    site-wide sale nobody approved.
+
+    Silent when the scheme is off (percent 0) or the order is their first.
+    """
+    from sqlalchemy import func, select
+    from sqlalchemy.exc import IntegrityError
+
+    from app.core.config import settings
+    from app.db.base import utcnow
+    from app.db.models import Order, PromoCode
+    from app.domain.referral import LOYALTY_PREFIX
+
+    if settings.loyalty_cashback_percent <= 0:
+        return None
+
+    with worker_session() as session:
+        order = session.get(Order, order_id)
+        if order is None or order.customer_id != customer_id:
+            return None
+
+        # This order's rank in the customer's history — not how many they have
+        # now. The two differ whenever the task runs late: a retry a week after
+        # the fact would otherwise see five paid orders and reward the customer's
+        # very first purchase, which is exactly what the scheme is not for.
+        # Ranked by id because ids are monotonic and paid_at can be null on rows
+        # that predate the column.
+        rank = session.scalar(
+            select(func.count(Order.id)).where(
+                Order.customer_id == customer_id,
+                Order.status == "paid",
+                Order.id <= order_id,
+            )
+        )
+        if (rank or 0) < settings.loyalty_cashback_from_order:
+            return None
+
+        # Derived from the order, not random: this is what makes the whole task
+        # idempotent. A retry builds the same code and the unique index refuses
+        # it, instead of quietly handing out a second discount.
+        code = f"{LOYALTY_PREFIX}{order_id}"
+        valid_until = utcnow() + timedelta(days=settings.loyalty_cashback_valid_days)
+        session.add(
+            PromoCode(
+                code=code,
+                discount_type="percent",
+                discount_value=settings.loyalty_cashback_percent,
+                max_uses=1,
+                used_count=0,
+                is_active=True,
+                valid_until=valid_until,
+                reason="loyalty",
+                issued_to_id=customer_id,
+            )
+        )
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            logger.info("loyalty.already_granted", customer_id=customer_id, order_id=order_id)
+            return None
+
+    logger.info(
+        "loyalty.granted",
+        customer_id=customer_id,
+        order_id=order_id,
+        code=code,
+        percent=settings.loyalty_cashback_percent,
+    )
+    return code
 
 
 @celery_app.task(
@@ -179,6 +270,7 @@ def fulfil_paid_order(self: Task, order_id: int) -> str:
         synchronise_supplier_order.delay(order_id)
 
     grant_referral_reward.delay(customer_id)
+    grant_loyalty_cashback.delay(customer_id, order_id)
 
     logger.info("fulfil.done", order_id=order_id, promo_redeemed=redeemed)
     return "ok"
