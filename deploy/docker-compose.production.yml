@@ -153,12 +153,19 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes --maxmemory 192mb --maxmemory-policy allkeys-lru
+    # requirepass is defence in depth, not a plugged hole: redis sits on an
+    # internal network with no published port, so reaching it already means code
+    # execution inside one of our own containers. It exists so that the *next*
+    # mistake — a shared network, a port published for debugging — is survivable.
+    command: redis-server --appendonly yes --maxmemory 192mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD}
     volumes:
       - redisdata:/data
     networks: [internal]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # The healthcheck has to authenticate too. Without this it answers NOAUTH,
+      # the container never reports healthy, and every service that waits on it
+      # refuses to start — an outage caused by a security improvement.
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 12
