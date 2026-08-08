@@ -18,3 +18,4 @@ htmlcov/
 # Runtime
 *.log
 celerybeat-schedule*
+dump.rdb

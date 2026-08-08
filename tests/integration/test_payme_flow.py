@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.config import settings
 from app.main import app
+from app.services.currency import charm_uzs
 
 RPC = "/api/payments/payme"
 
@@ -207,8 +208,26 @@ class TestOrderPlacement:
     async def test_placement_freezes_the_som_amount(self, paid_order: dict) -> None:
         assert paid_order["amount_uzs"] > 0
         assert paid_order["exchange_rate"] > 0
-        expected = round(paid_order["total_usd"] * paid_order["exchange_rate"], 2)
-        assert abs(paid_order["amount_uzs"] - expected) < 0.02
+        converted = Decimal(
+            str(round(paid_order["total_usd"] * paid_order["exchange_rate"], 2))
+        )
+        # Not the raw conversion: the amount is rounded down to the figure the
+        # storefront showed while the customer was choosing. Asserting equality
+        # with `charm_uzs` rather than a hand-written number keeps this test
+        # honest if the ladder is ever retuned, while the rule's own cases are
+        # pinned in tests/unit/test_charm_pricing.py.
+        assert Decimal(str(paid_order["amount_uzs"])) == charm_uzs(converted)
+
+    async def test_placement_never_bills_above_the_conversion(
+        self, paid_order: dict
+    ) -> None:
+        """The charm rounding only ever goes down.
+
+        An order that charged more than USD×rate would be a customer paying for
+        a rounding rule, which is the opposite of what it is for.
+        """
+        converted = paid_order["total_usd"] * paid_order["exchange_rate"]
+        assert paid_order["amount_uzs"] <= converted
 
     async def test_payment_url_carries_the_frozen_amount(self, paid_order: dict) -> None:
         decoded = base64.b64decode(paid_order["payment_url"].rsplit("/", 1)[1]).decode()

@@ -26,7 +26,7 @@ from app.domain.pricing import Quote
 from app.integrations.payme import checkout_url
 from app.schemas.commerce import CartItemIn
 from app.services.checkout import price_cart
-from app.services.currency import usd_to_uzs
+from app.services.currency import charm_uzs, usd_to_uzs
 
 logger = get_logger(__name__)
 
@@ -49,7 +49,11 @@ async def _freeze_som_amount(total_usd: Decimal) -> tuple[Decimal, Decimal]:
         )
 
     rate = Decimal(str(rate_payload["usd_to_uzs"]))
-    amount = (total_usd * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    # Charged, not merely displayed. The storefront shows the charm figure while
+    # the customer browses, so billing the raw conversion would mean a checkout
+    # that quietly costs more than the page it came from — the one difference
+    # nobody forgives. Both sides run the same rule; `charm_uzs` is where it lives.
+    amount = charm_uzs((total_usd * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return amount, rate
 
 
