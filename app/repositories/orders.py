@@ -21,7 +21,14 @@ SETTLED_ORDER_STATUSES = ("paid", "refunded")
 async def list_orders(session: AsyncSession, customer_id: int, limit: int = 100) -> list[Order]:
     stmt = (
         select(Order)
-        .options(selectinload(Order.esims).selectinload(ESIM.plan))
+        .options(
+            selectinload(Order.esims).selectinload(ESIM.plan),
+            # Each embedded eSIM reports what it was paid for, which reads its
+            # own order line. Both hops are loaded here: the eSIM's back
+            # reference to the order, and that order's items.
+            selectinload(Order.items),
+            selectinload(Order.esims).selectinload(ESIM.order).selectinload(Order.items),
+        )
         .where(
             Order.customer_id == customer_id,
             Order.status.in_(SETTLED_ORDER_STATUSES),

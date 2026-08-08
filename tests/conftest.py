@@ -10,6 +10,11 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://fastsim:fastsim@127.
 os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6379/15")
 os.environ.setdefault("ENVIRONMENT", "local")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+# A fixed Fernet key so the encrypted columns work under test. Without it
+# every test that creates an eSIM died on the QR payload — eleven of them,
+# which read as a broken suite rather than a missing variable. Fixed rather
+# than generated per run so a dump taken from one run is readable in the next.
+os.environ.setdefault("FIELD_ENCRYPTION_KEY", "B9QnF8_weiSbBAef1ISDIwsI9s5eSOKy7fYRzyF6pSk=")
 
 import pytest
 

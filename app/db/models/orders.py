@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, utcnow
@@ -114,6 +115,30 @@ class ESIM(Base):
     order: Mapped[Order] = relationship(back_populates="esims")
     plan: Mapped[Plan] = relationship()
 
+    def _sold_line(self) -> OrderItem | None:
+        """The order line this eSIM was sold on, or None if it is not loaded.
+
+        Deliberately refuses to fetch. These properties are read by Pydantic
+        while serialising a response, which happens outside the greenlet the
+        async engine needs — a lazy load there does not fetch, it raises
+        MissingGreenlet and turns the whole endpoint into a 500. That is exactly
+        what `/account/orders` did: it embeds eSIMs, and eager-loading was set
+        up on the eSIM listing but not on the order listing.
+
+        So an unloaded relationship reports "unknown price" and the response
+        still renders. The repositories eager-load it where the price matters.
+        """
+        state = sa_inspect(self)
+        if "order" in state.unloaded:
+            return None
+        order = self.order
+        if order is None or "items" in sa_inspect(order).unloaded:
+            return None
+        for item in order.items:
+            if item.plan_id == self.plan_id:
+                return item
+        return None
+
     @property
     def paid_usd(self) -> Decimal | None:
         """What this eSIM cost when it was bought, not what its plan costs now.
@@ -127,15 +152,10 @@ class ESIM(Base):
         removed from the order. A missing price is shown as missing rather than
         guessed at.
 
-        Requires `order.items` to be eager-loaded; the repository does that.
+        Requires `order.items` to be eager-loaded; the repositories do that.
         """
-        order = self.order
-        if order is None:
-            return None
-        for item in order.items:
-            if item.plan_id == self.plan_id:
-                return item.unit_price
-        return None
+        line = self._sold_line()
+        return line.unit_price if line is not None else None
 
     @property
     def paid_uzs(self) -> Decimal | None:
@@ -149,8 +169,11 @@ class ESIM(Base):
         """
         from app.services.currency import charm_uzs
 
-        usd = self.paid_usd
-        rate = self.order.exchange_rate if self.order is not None else None
+        line = self._sold_line()
+        if line is None:
+            return None
+        usd = line.unit_price
+        rate = line.order.exchange_rate
         if usd is None or rate is None:
             return None
         return charm_uzs((usd * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
