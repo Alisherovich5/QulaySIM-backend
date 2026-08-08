@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from app.core.cache import cache_key, get_or_set
+from app.core.cache import cache_key, get_or_set, get_redis
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.integrations.cbu import RateUnavailableError, fetch_usd_rate
 from app.schemas.base import JSONDict
 
 logger = get_logger(__name__)
+
+# How long a fallback rate is allowed to sit in Redis. Long enough to absorb a
+# burst, short enough that a recovered CBU reopens the shop within the minute.
+_FALLBACK_TTL = 60
 
 
 async def usd_to_uzs() -> JSONDict:
@@ -27,7 +31,25 @@ async def usd_to_uzs() -> JSONDict:
                 "source": "fallback",
             }
 
-    return await get_or_set(cache_key("currency"), settings.cache_ttl_currency, produce)
+    key = cache_key("currency")
+    payload = await get_or_set(key, settings.cache_ttl_currency, produce)
+
+    # A real rate is good for six hours. A fallback is not: checkout refuses to
+    # price an order against it, so caching one for six hours turns a moment of
+    # CBU being unreachable into six hours of nobody being able to pay. That is
+    # exactly what happened once — a restart raced the network, the fallback
+    # went into Redis, and the shop was closed until someone deleted the key.
+    # Shortening the entry instead of skipping the write keeps the stampede
+    # protection: a CBU outage still gets one request a minute, not one per
+    # visitor.
+    if payload.get("source") != "cbu":
+        try:
+            await get_redis().expire(key, _FALLBACK_TTL)
+        except Exception as exc:  # noqa: BLE001
+            # Losing the shortening is survivable; failing the request is not.
+            logger.warning("currency.fallback_ttl_failed", error=str(exc))
+
+    return payload
 
 
 # Below this the rounding is worth less than the noise it would add: nothing in
