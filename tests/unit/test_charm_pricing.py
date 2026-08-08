@@ -20,26 +20,28 @@ from app.services.currency import charm_uzs
 
 # (converted amount, what the customer should see)
 CASES = [
-    # The owner's examples.
-    (100_000, 99_000),
-    (200_000, 199_000),
-    (300_000, 299_000),
-    (30_000, 29_000),
-    (20_000, 19_000),
-    (50_000, 49_000),
-    (1_000_000, 990_000),
+    # The owner's thresholds, all of which fall out of the rule on their own:
+    # X 000 minus one is (X-1) 999, so the leading digit drops by itself.
+    (100_000, 99_999),
+    (200_000, 199_999),
+    (300_000, 299_999),
+    (30_000, 29_999),
+    (20_000, 19_999),
+    (50_000, 49_999),
+    (1_000_000, 999_999),
     # Real conversions, which never land on round numbers.
-    (220_439, 219_000),
-    (77_451, 77_000),
-    (11_915, 11_900),
-    (8_462, 8_400),
-    # Already low-reading: nothing to gain, so nothing is taken.
-    (29_400, 29_000),
-    (199_000, 199_000),
-    (99_000, 99_000),
-    # Too cheap for the rule to be worth anything.
-    (4_999, 4_999),
-    (1_200, 1_200),
+    (220_437, 219_999),
+    (77_451, 76_999),
+    (29_788, 29_999),
+    (11_915, 11_999),
+    (8_462, 7_999),
+    # Already ending in 999: nothing to do.
+    (29_999, 29_999),
+    (199_999, 199_999),
+    (11_999, 11_999),
+    # Too cheap for a thousand-som step to mean anything.
+    (1_999, 1_999),
+    (500, 500),
     (0, 0),
 ]
 
@@ -61,21 +63,36 @@ def test_charm_uzs_is_idempotent(amount: int, expected: int) -> None:
 
 
 @pytest.mark.parametrize(("amount", "expected"), CASES)
-def test_charm_uzs_never_charges_more_than_the_conversion(
-    amount: int, expected: int
-) -> None:
-    """Downward only. Rounding up would bill above the quoted price."""
-    assert Decimal(expected) <= Decimal(amount)
+def test_charm_uzs_always_ends_in_999(amount: int, expected: int) -> None:
+    """The whole point of the rule, asserted directly.
 
-
-def test_charm_uzs_gives_away_at_most_one_step() -> None:
-    """The discount is bounded, so margin can be reasoned about.
-
-    Worst case is one step below the round number: 1 000 so'm under a million,
-    10 000 above it. At ~12 000 so'm to the dollar that is under $0.09 and
-    under $0.84 respectively — inside every markup band in the catalogue.
+    Everything above the floor must end in 999 — including the cases that were
+    already round, which is where a rule that only rounded down would leave
+    30 000 as 30 000.
     """
-    for amount in range(5_000, 2_000_000, 337):
-        step = 100 if amount < 20_000 else 1_000 if amount < 1_000_000 else 10_000
-        given_away = amount - int(charm_uzs(Decimal(amount)))
-        assert 0 <= given_away < step * 2, amount
+    if amount >= 2_000:
+        assert expected % 1_000 == 999, expected
+
+
+def test_charm_uzs_moves_a_price_by_less_than_half_a_thousand() -> None:
+    """The deviation is bounded and symmetric, so margin can be reasoned about.
+
+    Half-up to the nearest thousand then minus one lands within [-500, +499] of
+    the conversion — about four cents at 12 000 so'm to the dollar, against
+    markups that start at 15%. It rounds *up* on some amounts, which the earlier
+    downward-only version did not; the som figure is therefore no longer bounded
+    above by USD × rate, and the "≈ $2.50" on the card is an approximation.
+    """
+    for amount in range(2_000, 2_000_000, 337):
+        moved = int(charm_uzs(Decimal(amount))) - amount
+        assert -500 <= moved <= 499, (amount, moved)
+
+
+def test_below_the_floor_the_amount_is_untouched() -> None:
+    """A thousand-som step larger than the price would produce nonsense.
+
+    Nothing in the catalogue is this cheap — the floor exists so the arithmetic
+    cannot go negative, not because these prices are expected.
+    """
+    for amount in range(0, 2_000, 7):
+        assert charm_uzs(Decimal(amount)) == Decimal(amount)

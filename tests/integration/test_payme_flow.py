@@ -218,16 +218,19 @@ class TestOrderPlacement:
         # pinned in tests/unit/test_charm_pricing.py.
         assert Decimal(str(paid_order["amount_uzs"])) == charm_uzs(converted)
 
-    async def test_placement_never_bills_above_the_conversion(
+    async def test_placement_bills_a_999_amount_close_to_the_conversion(
         self, paid_order: dict
     ) -> None:
-        """The charm rounding only ever goes down.
+        """What is charged ends in 999 and stays within half a thousand of USD×rate.
 
-        An order that charged more than USD×rate would be a customer paying for
-        a rounding rule, which is the opposite of what it is for.
+        The rounding goes both ways, so this cannot assert an upper bound of the
+        raw conversion. What it can assert is that the invoice carries the same
+        shape the customer was shown, and that the gap is the rounding and not a
+        pricing bug.
         """
         converted = paid_order["total_usd"] * paid_order["exchange_rate"]
-        assert paid_order["amount_uzs"] <= converted
+        assert paid_order["amount_uzs"] % 1_000 == 999
+        assert abs(paid_order["amount_uzs"] - converted) <= 500
 
     async def test_payment_url_carries_the_frozen_amount(self, paid_order: dict) -> None:
         decoded = base64.b64decode(paid_order["payment_url"].rsplit("/", 1)[1]).decode()
