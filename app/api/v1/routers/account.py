@@ -16,7 +16,7 @@ from app.schemas.account import (
 )
 from app.schemas.auth import CustomerOut, ProfileUpdateIn
 from app.schemas.base import JSONDict
-from app.schemas.commerce import ESIMOut, OrderOut, TopUpIn
+from app.schemas.commerce import ESIMOut, OrderOut
 from app.services import account as service
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -46,11 +46,17 @@ async def activate(esim_id: int, session: SessionDep, customer: CurrentCustomer)
     return await service.activate_esim(session, customer, esim_id)
 
 
-@router.post("/esims/{esim_id}/topup", response_model=ESIMOut)
-async def topup(
-    esim_id: int, payload: TopUpIn, session: SessionDep, customer: CurrentCustomer
-) -> ESIM:
-    return await service.topup_esim(session, customer, esim_id, payload.extra_mb)
+# The top-up endpoint is deliberately absent.
+#
+# What it did was `esim.data_total_mb += extra_mb` and commit: no payment, no
+# call to the supplier. So it was free — a customer could press the button until
+# they held 50 GB — and the data was fictional, because only our own row changed
+# while the profile on the wholesaler's side still carried what was bought. The
+# customer would have been shown an allowance they could never use, which is the
+# worse half of the two.
+#
+# A real top-up is a purchase: price it, take payment, order the extra bundle
+# from the supplier, and only then move the number. Until that exists, no route.
 
 
 @router.patch("/profile", response_model=CustomerOut)

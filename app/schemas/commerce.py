@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import Field
 
@@ -54,6 +55,12 @@ class ESIMOut(APIModel):
     activated_at: datetime | None = None
     expires_at: datetime | None = None
     created_at: datetime
+    # What was actually paid for this eSIM, frozen at the sale. Null when the
+    # order line is gone, which is shown as unknown rather than filled in with
+    # the plan's current price — a customer who bought before a repricing would
+    # otherwise be told the wrong number about their own receipt.
+    paid_usd: Decimal | None = None
+    paid_uzs: Decimal | None = None
     plan: PlanOut
 
 
@@ -66,10 +73,6 @@ class OrderOut(APIModel):
     created_at: datetime
     paid_at: datetime | None = None
     esims: list[ESIMOut] = []
-
-
-class TopUpIn(APIModel):
-    extra_mb: int = Field(ge=256, le=51200)
 
 
 class OrderPlacedOut(APIModel):

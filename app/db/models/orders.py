@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import (
     BigInteger,
@@ -113,6 +113,47 @@ class ESIM(Base):
 
     order: Mapped[Order] = relationship(back_populates="esims")
     plan: Mapped[Plan] = relationship()
+
+    @property
+    def paid_usd(self) -> Decimal | None:
+        """What this eSIM cost when it was bought, not what its plan costs now.
+
+        Read from the order line, which freezes `unit_price` at the moment of
+        sale. Joining to the plan instead would rewrite history every time the
+        catalogue reprices — a customer opening their account after a price
+        change would be told they paid today's number.
+
+        None when the line cannot be found: an eSIM issued by hand, or a plan
+        removed from the order. A missing price is shown as missing rather than
+        guessed at.
+
+        Requires `order.items` to be eager-loaded; the repository does that.
+        """
+        order = self.order
+        if order is None:
+            return None
+        for item in order.items:
+            if item.plan_id == self.plan_id:
+                return item.unit_price
+        return None
+
+    @property
+    def paid_uzs(self) -> Decimal | None:
+        """The same amount in som, at the rate frozen on the order.
+
+        Converted with the order's own `exchange_rate` rather than today's, so
+        the figure still matches the receipt months later. Rounded with the same
+        charm rule the storefront and checkout use, which makes it identical to
+        what was actually charged on a single-line order and the line's fair
+        share on a larger one.
+        """
+        from app.services.currency import charm_uzs
+
+        usd = self.paid_usd
+        rate = self.order.exchange_rate if self.order is not None else None
+        if usd is None or rate is None:
+            return None
+        return charm_uzs((usd * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
 class Payment(Base):

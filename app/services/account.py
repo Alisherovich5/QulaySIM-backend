@@ -20,7 +20,6 @@ from app.schemas.base import JSONDict
 
 logger = get_logger(__name__)
 
-MAX_TOPUP_MB = 51200
 
 
 async def summary(
@@ -83,24 +82,6 @@ async def activate_esim(session: AsyncSession, customer: Customer, esim_id: int)
     await session.commit()
     await session.refresh(esim)
     logger.info("esim.activated", esim_id=esim.id, customer_id=customer.id)
-    return esim
-
-
-async def topup_esim(
-    session: AsyncSession, customer: Customer, esim_id: int, extra_mb: int
-) -> ESIM:
-    esim = await order_repo.get_owned_esim(session, esim_id, customer.id, lock=True)
-    if esim is None:
-        raise NotFoundError("eSIM not found")
-    if esim.status == ESIMStatus.EXPIRED:
-        raise ConflictError("Cannot top up an expired eSIM")
-    if esim.data_total_mb + extra_mb > MAX_TOPUP_MB:
-        raise DomainError(f"An eSIM may hold at most {MAX_TOPUP_MB // 1024} GB")
-
-    esim.data_total_mb += extra_mb
-    await session.commit()
-    await session.refresh(esim)
-    logger.info("esim.topped_up", esim_id=esim.id, extra_mb=extra_mb)
     return esim
 
 

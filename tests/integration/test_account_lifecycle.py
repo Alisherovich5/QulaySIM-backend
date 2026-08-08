@@ -13,6 +13,7 @@ from app.core.security import hash_password
 from app.db.models import ESIM, Customer, Order, Plan
 from app.db.models.enums import ESIMStatus
 from app.db.session import SessionFactory
+from app.main import app
 from app.services import account as service
 
 
@@ -103,35 +104,26 @@ class TestActivation:
             await service.activate_esim(session, attacker, esim.id)
 
 
-class TestTopUp:
-    async def test_adds_allowance(self, session) -> None:
-        customer = await _make_customer(session)
-        esim = await _make_esim(session, customer, data_total_mb=1024)
+class TestTopUpIsGone:
+    """Topping up was free and fictional, so the route no longer exists.
 
-        result = await service.topup_esim(session, customer, esim.id, 2048)
-        assert result.data_total_mb == 3072
+    The old tests asserted that pressing it raised the allowance — which it did,
+    without charging anyone and without telling the supplier, so the customer
+    ended up holding a number they could not spend. They passed on behaviour
+    that should never have shipped, which is why they are replaced rather than
+    fixed. What is asserted now is the absence: no endpoint, and no service
+    function behind it for a future caller to rediscover.
+    """
 
-    async def test_ceiling_enforced(self, session) -> None:
-        customer = await _make_customer(session)
-        esim = await _make_esim(session, customer, data_total_mb=51000)
+    async def test_the_endpoint_is_not_routed(self) -> None:
+        # Routers are included rather than flattened, so `app.routes` holds
+        # wrappers without a `path`; the generated schema is the reliable list
+        # of what is actually reachable.
+        paths = set(app.openapi()["paths"])
+        assert not any(path.endswith("/topup") for path in paths), sorted(paths)
 
-        with pytest.raises(DomainError, match="at most"):
-            await service.topup_esim(session, customer, esim.id, 5000)
-
-    async def test_expired_esim_cannot_be_topped_up(self, session) -> None:
-        customer = await _make_customer(session)
-        esim = await _make_esim(session, customer, status=ESIMStatus.EXPIRED)
-
-        with pytest.raises(ConflictError):
-            await service.topup_esim(session, customer, esim.id, 1024)
-
-    async def test_cannot_top_up_someone_elses_esim(self, session) -> None:
-        owner = await _make_customer(session)
-        attacker = await _make_customer(session)
-        esim = await _make_esim(session, owner)
-
-        with pytest.raises(NotFoundError):
-            await service.topup_esim(session, attacker, esim.id, 1024)
+    async def test_the_service_no_longer_offers_it(self) -> None:
+        assert not hasattr(service, "topup_esim")
 
 
 class TestProfile:

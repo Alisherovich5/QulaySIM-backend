@@ -10,11 +10,22 @@ from app.db.models import ESIM, Country, Order, OrderItem, Plan, PromoCode
 from app.repositories.catalog import localised_country_name
 
 
+#: Statuses a customer's purchase history should contain. `pending` is a
+#: checkout that was opened and never paid, and `cancelled` is the same thing
+#: after the customer said so — neither is a purchase, and listing them as
+#: "Order #41 · 0 eSIMs · awaiting" made an abandoned tab look like something
+#: owed. What the customer wants to see is what they bought.
+SETTLED_ORDER_STATUSES = ("paid", "refunded")
+
+
 async def list_orders(session: AsyncSession, customer_id: int, limit: int = 100) -> list[Order]:
     stmt = (
         select(Order)
         .options(selectinload(Order.esims).selectinload(ESIM.plan))
-        .where(Order.customer_id == customer_id)
+        .where(
+            Order.customer_id == customer_id,
+            Order.status.in_(SETTLED_ORDER_STATUSES),
+        )
         .order_by(Order.created_at.desc())
         .limit(limit)
     )
@@ -25,7 +36,13 @@ async def list_orders(session: AsyncSession, customer_id: int, limit: int = 100)
 async def list_esims(session: AsyncSession, customer_id: int) -> list[ESIM]:
     stmt = (
         select(ESIM)
-        .options(selectinload(ESIM.plan))
+        .options(
+            selectinload(ESIM.plan),
+            # `paid_usd` and `paid_uzs` read the order line the eSIM was sold
+            # on. Without this the properties would touch a lazy relationship
+            # from async code and raise instead of returning a price.
+            selectinload(ESIM.order).selectinload(Order.items),
+        )
         .where(ESIM.customer_id == customer_id)
         .order_by(ESIM.created_at.desc())
     )
@@ -40,7 +57,10 @@ async def get_owned_esim(
     after the fact, so an IDOR cannot slip through a forgotten check."""
     stmt = (
         select(ESIM)
-        .options(selectinload(ESIM.plan))
+        .options(
+            selectinload(ESIM.plan),
+            selectinload(ESIM.order).selectinload(Order.items),
+        )
         .where(ESIM.id == esim_id, ESIM.customer_id == customer_id)
     )
     if lock:
