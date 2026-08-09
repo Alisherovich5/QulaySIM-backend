@@ -22,6 +22,7 @@ celery_app = Celery(
     include=[
         "app.workers.tasks.provisioning",
         "app.workers.tasks.maintenance",
+        "app.workers.tasks.reports",
     ],
 )
 
@@ -54,5 +55,35 @@ celery_app.conf.beat_schedule = {
     "warm-catalog-cache": {
         "task": "maintenance.warm_catalog_cache",
         "schedule": crontab(minute="*/10"),
+    },
+    # Reports land at 07:00 Tashkent, which is 02:00 UTC — the schedule runs in
+    # UTC, and writing the conversion here beats rediscovering it every time a
+    # report arrives at the wrong hour. Each period is offset by five minutes so
+    # a day that is also the 1st of the month does not fire four reports in the
+    # same second and race for the same Telegram rate limit.
+    "report-daily": {
+        "task": "reports.send_period",
+        "schedule": crontab(minute=0, hour=2),
+        "args": (1,),
+    },
+    "report-3-day": {
+        "task": "reports.send_period",
+        "schedule": crontab(minute=5, hour=2, day_of_month="*/3"),
+        "args": (3,),
+    },
+    "report-weekly": {
+        "task": "reports.send_period",
+        "schedule": crontab(minute=10, hour=2, day_of_week=1),
+        "args": (7,),
+    },
+    "report-monthly": {
+        "task": "reports.send_period",
+        "schedule": crontab(minute=15, hour=2, day_of_month=1),
+        "args": (30,),
+    },
+    "report-quarterly": {
+        "task": "reports.send_period",
+        "schedule": crontab(minute=20, hour=2, day_of_month=1, month_of_year="1,4,7,10"),
+        "args": (90,),
     },
 }
