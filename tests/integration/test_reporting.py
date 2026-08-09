@@ -45,7 +45,10 @@ def worker_session():
     finally:
         engine.dispose()
 
-NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+# Far enough ahead that no row left behind by another test file — they all
+# carry real timestamps — can fall inside a window under test. Combined with
+# never committing, that makes every count below exactly what this test seeded.
+NOW = datetime(2031, 6, 15, 12, 0, tzinfo=UTC)
 
 
 def _seed_sale(
@@ -136,7 +139,6 @@ async def test_revenue_cost_and_margin_come_from_the_frozen_lines() -> None:
     with worker_session() as session:
         _seed_sale(session, paid_at=NOW - timedelta(hours=2))
         _seed_sale(session, paid_at=NOW - timedelta(hours=5), provider="esimcard")
-        session.commit()
 
         report = build_report(session, days=1, now=NOW)
 
@@ -154,7 +156,6 @@ async def test_each_supplier_is_reported_separately() -> None:
         _seed_sale(session, paid_at=NOW - timedelta(hours=1), provider="esimaccess")
         _seed_sale(session, paid_at=NOW - timedelta(hours=2), provider="esimaccess")
         _seed_sale(session, paid_at=NOW - timedelta(hours=3), provider="esimcard")
-        session.commit()
 
         report = build_report(session, days=1, now=NOW)
 
@@ -173,7 +174,6 @@ async def test_an_unpaid_order_earns_nothing() -> None:
             status=OrderStatus.PENDING,
             with_esim=False,
         )
-        session.commit()
 
         report = build_report(session, days=1, now=NOW)
 
@@ -185,7 +185,6 @@ async def test_an_unpaid_order_earns_nothing() -> None:
 async def test_a_sale_outside_the_window_is_not_counted() -> None:
     with worker_session() as session:
         _seed_sale(session, paid_at=NOW - timedelta(days=3))
-        session.commit()
 
         day = build_report(session, days=1, now=NOW)
         week = build_report(session, days=7, now=NOW)
@@ -198,7 +197,6 @@ async def test_a_paid_order_with_no_esim_is_reported_as_a_problem() -> None:
     """The failure worth waking up for: charged, and nothing delivered."""
     with worker_session() as session:
         order = _seed_sale(session, paid_at=NOW - timedelta(hours=1), with_esim=False)
-        session.commit()
 
         report = build_report(session, days=1, now=NOW)
 
@@ -214,7 +212,6 @@ async def test_each_purchase_is_listed_with_its_tariff_country_and_supplier() ->
             provider="esimcard",
             expires_at=NOW + timedelta(days=14),
         )
-        session.commit()
 
         report = build_report(session, days=1, now=NOW)
 
@@ -235,7 +232,6 @@ async def test_an_esim_that_ran_out_in_the_window_is_reported() -> None:
             expires_at=NOW - timedelta(hours=1),
             esim_status=ESIMStatus.EXPIRED,
         )
-        session.commit()
 
         report = build_report(session, days=1, now=NOW)
 
@@ -248,7 +244,6 @@ async def test_the_message_fits_in_one_telegram_send() -> None:
     with worker_session() as session:
         for hour in range(40):
             _seed_sale(session, paid_at=NOW - timedelta(minutes=hour + 1))
-        session.commit()
 
         report = build_report(session, days=1, now=NOW)
 
