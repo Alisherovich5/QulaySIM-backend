@@ -13,7 +13,13 @@ from decimal import Decimal
 
 import pytest
 
-from app.domain.pricing import PricedLine, PromoRule, build_quote, validate_promo
+from app.domain.pricing import (
+    PROMO_FIRST_ORDER_ONLY,
+    PricedLine,
+    PromoRule,
+    build_quote,
+    validate_promo,
+)
 
 NOW = datetime(2026, 8, 10, 12, 0, tzinfo=UTC)
 
@@ -61,6 +67,8 @@ def test_a_returning_buyer_does_not() -> None:
     assert quote.discount == Decimal("0")
     assert quote.total == Decimal("10.00")
     assert quote.promo_message == "This code is for your first order"
+    # The slug is what the storefront translates; the prose is the fallback.
+    assert quote.promo_reason == PROMO_FIRST_ORDER_ONLY
 
 
 def test_an_anonymous_visitor_still_sees_the_advertised_discount() -> None:
@@ -84,8 +92,9 @@ def test_an_anonymous_visitor_still_sees_the_advertised_discount() -> None:
 
 @pytest.mark.parametrize("paid", [1, 2, 17])
 def test_any_previous_purchase_blocks_it(paid: int) -> None:
-    assert validate_promo(_rule(customer_paid_orders=paid), now=NOW, subtotal=Decimal("10")) == (
-        "This code is for your first order"
+    assert (
+        validate_promo(_rule(customer_paid_orders=paid), now=NOW, subtotal=Decimal("10"))
+        == PROMO_FIRST_ORDER_ONLY
     )
 
 

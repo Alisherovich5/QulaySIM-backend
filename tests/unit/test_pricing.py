@@ -9,6 +9,9 @@ import pytest
 
 from app.domain.pricing import (
     MAX_LINE_QUANTITY,
+    PROMO_EXPIRED,
+    PROMO_INVALID,
+    PROMO_LIMIT_REACHED,
     PricedLine,
     PricingError,
     PromoRule,
@@ -79,14 +82,14 @@ class TestDiscount:
 
 class TestPromoValidation:
     def test_missing_code(self) -> None:
-        assert validate_promo(None) == "Promo code is invalid"
+        assert validate_promo(None) == PROMO_INVALID
 
     def test_inactive(self) -> None:
-        assert validate_promo(promo(is_active=False)) == "Promo code is invalid"
+        assert validate_promo(promo(is_active=False)) == PROMO_INVALID
 
     def test_expired(self) -> None:
         past = datetime.now(UTC) - timedelta(days=1)
-        assert validate_promo(promo(valid_until=past)) == "Promo code has expired"
+        assert validate_promo(promo(valid_until=past)) == PROMO_EXPIRED
 
     def test_naive_datetime_treated_as_utc(self) -> None:
         """Django can hand back naive datetimes; comparing them must not crash."""
@@ -95,7 +98,7 @@ class TestPromoValidation:
 
     def test_usage_cap_reached(self) -> None:
         rule = promo(max_uses=5, used_count=5)
-        assert validate_promo(rule) == "Promo code usage limit reached"
+        assert validate_promo(rule) == PROMO_LIMIT_REACHED
 
     def test_unlimited_uses(self) -> None:
         assert validate_promo(promo(max_uses=0, used_count=999)) is None
@@ -152,10 +155,14 @@ class TestMinimumOrder:
 
         from app.domain.pricing import validate_promo
 
-        reason = validate_promo(self._rule(), subtotal=Decimal("1.99"))
-        assert reason is not None
-        # The message has to name the figure, or the customer cannot act on it.
-        assert "25" in reason
+        from app.domain.pricing import PROMO_MIN_ORDER, promo_message_for
+
+        rule = self._rule()
+        reason = validate_promo(rule, subtotal=Decimal("1.99"))
+        assert reason == PROMO_MIN_ORDER
+        # The slug alone cannot name the figure, and the customer cannot act on
+        # "your order is too small" without it — so the rendered message must.
+        assert "25" in (promo_message_for(reason, rule) or "")
 
     def test_a_cart_at_the_minimum_is_allowed(self):
         from decimal import Decimal

@@ -33,6 +33,8 @@ async def quote(
         total=result.total,
         promo_applied=result.promo_applied,
         promo_message=result.promo_message,
+        promo_reason=result.promo_reason,
+        promo_min_order_usd=result.promo_min_order_usd,
         lines=[
             QuoteLineOut(
                 plan_id=line.plan_id,

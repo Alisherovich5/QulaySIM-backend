@@ -60,10 +60,45 @@ class Quote:
     promo_applied: bool
     promo_message: str | None
     lines: tuple[PricedLine, ...]
+    #: Stable slug for why a code was refused, so the storefront can translate
+    #: it instead of showing the English prose in `promo_message`.
+    promo_reason: str | None = None
+    #: Set only when the refusal was the minimum-order rule, because that is the
+    #: one message a translation cannot write without the figure.
+    promo_min_order_usd: Decimal | None = None
 
 
 class PricingError(ValueError):
     """Cart cannot be priced (empty, unavailable plan, absurd quantity)."""
+
+
+#: Rejection reasons, as stable slugs rather than prose.
+#:
+#: The storefront showed whatever text the API returned, so an Uzbek customer
+#: read "Promo code has expired" in English. Prose cannot be translated on the
+#: client without matching strings, which breaks the moment the wording changes;
+#: a slug can. `promo_message_for` still renders English for anything that has no
+#: translation of its own.
+PROMO_INVALID = "promo_invalid"
+PROMO_EXPIRED = "promo_expired"
+PROMO_LIMIT_REACHED = "promo_limit_reached"
+PROMO_MIN_ORDER = "promo_min_order"
+PROMO_FIRST_ORDER_ONLY = "promo_first_order_only"
+
+
+def promo_message_for(reason: str | None, promo: PromoRule | None = None) -> str | None:
+    """English text for a rejection slug, for callers that want prose."""
+    if reason is None:
+        return None
+    if reason == PROMO_MIN_ORDER and promo is not None:
+        return f"This code applies to orders of ${promo.min_order_usd:g} or more"
+    return {
+        PROMO_INVALID: "Promo code is invalid",
+        PROMO_EXPIRED: "Promo code has expired",
+        PROMO_LIMIT_REACHED: "Promo code usage limit reached",
+        PROMO_MIN_ORDER: "This code applies to a larger order",
+        PROMO_FIRST_ORDER_ONLY: "This code is for your first order",
+    }.get(reason, reason)
 
 
 def validate_promo(
@@ -79,22 +114,22 @@ def validate_promo(
     applies to a $1.99 cart and the plan is free.
     """
     if promo is None:
-        return "Promo code is invalid"
+        return PROMO_INVALID
     if not promo.is_active:
-        return "Promo code is invalid"
+        return PROMO_INVALID
     moment = now or datetime.now(UTC)
     if promo.valid_until is not None:
         deadline = promo.valid_until
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=UTC)
         if deadline < moment:
-            return "Promo code has expired"
+            return PROMO_EXPIRED
     if promo.max_uses and promo.used_count >= promo.max_uses:
-        return "Promo code usage limit reached"
+        return PROMO_LIMIT_REACHED
     if subtotal is not None and promo.min_order_usd > ZERO and subtotal < promo.min_order_usd:
-        return f"This code applies to orders of ${promo.min_order_usd:g} or more"
+        return PROMO_MIN_ORDER
     if promo.first_order_only and (promo.customer_paid_orders or 0) > 0:
-        return "This code is for your first order"
+        return PROMO_FIRST_ORDER_ONLY
     return None
 
 
@@ -127,12 +162,25 @@ def build_quote(
     subtotal = money(sum((line.line_total for line in lines), start=ZERO))
 
     if not promo_requested:
-        return Quote(subtotal, ZERO, subtotal, False, None, tuple(lines))
+        return Quote(subtotal, ZERO, subtotal, False, None, tuple(lines))  # no code asked for
 
     # The subtotal is known by here, so the minimum-order rule can be applied.
     rejection = validate_promo(promo, now=now, subtotal=subtotal)
     if rejection or promo is None:
-        return Quote(subtotal, ZERO, subtotal, False, rejection, tuple(lines))
+        return Quote(
+            subtotal=subtotal,
+            discount=ZERO,
+            total=subtotal,
+            promo_applied=False,
+            # Prose for anything that cannot translate the slug, slug for the
+            # storefront, which can.
+            promo_message=promo_message_for(rejection, promo),
+            lines=tuple(lines),
+            promo_reason=rejection,
+            promo_min_order_usd=(
+                promo.min_order_usd if rejection == PROMO_MIN_ORDER and promo else None
+            ),
+        )
 
     discount = compute_discount(subtotal, promo)
     return Quote(

@@ -39,7 +39,16 @@ class QuoteOut(APIModel):
     discount: Money
     total: Money
     promo_applied: bool
+    # English prose, kept as the fallback for anything that cannot translate.
     promo_message: str | None = None
+    # Stable slug for the same rejection. The storefront showed `promo_message`
+    # verbatim, so an Uzbek customer read "Promo code has expired" in English;
+    # a slug can be translated where prose cannot.
+    promo_reason: str | None = None
+    # The code's minimum order, sent only when that is why it was refused. The
+    # customer cannot act on "your order is too small" without the figure, and
+    # the translated sentence has nowhere else to get it from.
+    promo_min_order_usd: Money | None = None
     lines: list[QuoteLineOut] = []
 
 
