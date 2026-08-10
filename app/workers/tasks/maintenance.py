@@ -139,7 +139,7 @@ def refresh_esim_usage() -> int:
     )
 
     client = EsimAccessClient()
-    if not client.is_configured():
+    if not client.is_configured:
         return 0
 
     payload = client.query_profiles(order_no="")
