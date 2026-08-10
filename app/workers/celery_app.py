@@ -52,6 +52,13 @@ celery_app.conf.beat_schedule = {
         "task": "maintenance.refresh_currency_rate",
         "schedule": crontab(minute=0, hour="*/6"),
     },
+    # Usage is what customers open their account to check, so it is polled often
+    # enough that the number they see is roughly current, and rarely enough that
+    # the wholesaler is not asked once a minute for data that changes slowly.
+    "refresh-esim-usage": {
+        "task": "maintenance.refresh_esim_usage",
+        "schedule": crontab(minute="*/20"),
+    },
     "warm-catalog-cache": {
         "task": "maintenance.warm_catalog_cache",
         "schedule": crontab(minute="*/10"),

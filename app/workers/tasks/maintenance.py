@@ -111,3 +111,83 @@ def count_stale_pending_esims() -> int:
     if rows:
         logger.warning("maintenance.stale_pending_esims", count=len(rows))
     return len(rows)
+
+
+@celery_app.task(name="maintenance.refresh_esim_usage")
+def refresh_esim_usage() -> int:
+    """Pull used-data, status and expiry from the wholesaler for live eSIMs.
+
+    `sync_order_profiles` maps `orderUsage` correctly, but it only runs when an
+    order is fulfilled — and at that moment nothing has been used yet. Nothing
+    refreshed it afterwards, so the admin showed 0% for every eSIM forever and
+    customers kept opening their account to look for a number that never moved.
+    One of them had spent 471 MB of a 1 GB plan while the page said none.
+
+    The wholesaler's figure is authoritative for the allowance too, so writing
+    `data_total_mb` here also repairs a row whose total drifted.
+
+    eSIM Access only. eSIMCard's listing carries no usage field, so its profiles
+    are left alone rather than being reset to zero by a source that does not
+    know — a wrong number is worse than a stale one.
+    """
+    from math import ceil
+
+    from app.integrations.esim_access import (
+        EsimAccessClient,
+        _local_status,
+        _parse_supplier_date,
+    )
+
+    client = EsimAccessClient()
+    if not client.is_configured():
+        return 0
+
+    payload = client.query_profiles(order_no="")
+    profiles = {
+        str(p.get("esimTranNo")): p
+        for p in ((payload.get("obj") or {}).get("esimList") or [])
+        if p.get("esimTranNo")
+    }
+    if not profiles:
+        return 0
+
+    updated = 0
+    with worker_session() as session:
+        rows = (
+            session.execute(
+                select(ESIM).where(
+                    ESIM.provider == "esimaccess",
+                    ESIM.status.in_((ESIMStatus.PENDING, ESIMStatus.ACTIVE)),
+                    ESIM.provider_esim_tran_no != "",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for esim in rows:
+            profile = profiles.get(esim.provider_esim_tran_no)
+            if profile is None:
+                continue
+
+            used_bytes = int(profile.get("orderUsage") or 0)
+            total_bytes = int(profile.get("totalVolume") or 0)
+            fresh = {
+                "data_used_mb": ceil(used_bytes / (1024 * 1024)) if used_bytes else 0,
+                "provider_status": str(profile.get("esimStatus") or ""),
+                "status": _local_status(str(profile.get("esimStatus") or "")),
+                "expires_at": _parse_supplier_date(profile.get("expiredTime")),
+            }
+            if total_bytes:
+                fresh["data_total_mb"] = ceil(total_bytes / (1024 * 1024))
+
+            # Only count a row as updated when something actually moved, so the
+            # log line means "usage changed" rather than "the task ran".
+            if any(getattr(esim, field) != value for field, value in fresh.items()):
+                for field, value in fresh.items():
+                    setattr(esim, field, value)
+                updated += 1
+        session.commit()
+
+    if updated:
+        logger.info("maintenance.esim_usage_refreshed", updated=updated, seen=len(profiles))
+    return updated
