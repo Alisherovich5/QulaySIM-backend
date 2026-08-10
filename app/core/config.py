@@ -95,7 +95,11 @@ class Settings(BaseSettings):
     atmos_base_url: str = "https://apigw.atmos.uz"
     # ATMOS documents this range as the source of every callback.
     atmos_callback_cidr: str = "92.63.207.0/24"
-    atmos_success_url: str = "https://qulaysim.uz/account"
+    # Straight to the eSIM tab, not to the account overview. A customer who has
+    # just paid lands here, and the overview opens on the travel globe — so the
+    # QR code they came for was one more click away, which is one click too many
+    # for somebody standing at an airport.
+    atmos_success_url: str = "https://qulaysim.uz/account?tab=esims"
     # Master switch only. Which wholesaler fulfils a given order is decided per
     # plan by the cheapest supplier offer (see app/integrations/suppliers.py);
     # this just says whether real supplier calls happen at all, so "mock" stays
