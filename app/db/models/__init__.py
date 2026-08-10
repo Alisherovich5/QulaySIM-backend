@@ -29,6 +29,7 @@ from app.db.models.orders import (
     PaymeTransaction,
     PromoCode,
     SupplierPurchase,
+    TelegramRecipient,
 )
 
 __all__ = [
@@ -60,5 +61,6 @@ __all__ = [
     "SocialAccount",
     "SupplierOffer",
     "SupplierPurchase",
+    "TelegramRecipient",
     "Testimonial",
 ]

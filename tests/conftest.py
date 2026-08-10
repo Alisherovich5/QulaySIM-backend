@@ -10,6 +10,17 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://fastsim:fastsim@127.
 os.environ.setdefault("REDIS_URL", "redis://127.0.0.1:6379/15")
 os.environ.setdefault("ENVIRONMENT", "local")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
+# Tests must never reach Telegram. A developer's .env carries the real bot token,
+# and the support-form smoke test posts a plausible-looking message — which is how
+# "Test User / customer@example.com" arrived on the shop owner's phone during a
+# routine test run.
+#
+# Set, not setdefault: the point is to override whatever the environment holds.
+# With no token the endpoint answers 503 before any network call, which the smoke
+# test already accepts. Tests that exercise delivery set the token themselves and
+# patch the HTTP client.
+os.environ["TELEGRAM_BOT_TOKEN"] = ""
+os.environ["TELEGRAM_CHAT_ID"] = ""
 # A fixed Fernet key so the encrypted columns work under test. Without it
 # every test that creates an eSIM died on the QR payload — eleven of them,
 # which read as a broken suite rather than a missing variable. Fixed rather

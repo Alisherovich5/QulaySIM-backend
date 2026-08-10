@@ -276,3 +276,15 @@ class AtmosTransaction(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     order: Mapped[Order] = relationship()
+
+
+class TelegramRecipient(Base):
+    """Who the bot writes to. Owned by the Django admin; read-only here."""
+
+    __tablename__ = "orders_telegramrecipient"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    chat_id: Mapped[str] = mapped_column(String(32), unique=True)
+    label: Mapped[str] = mapped_column(String(80))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

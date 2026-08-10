@@ -21,20 +21,50 @@ def _escape(value: str) -> str:
 MAX_MESSAGE_CHARS = 4096
 
 
-def chat_ids() -> list[str]:
-    """Every chat a message should reach.
-
-    `TELEGRAM_CHAT_ID` started as one id and stayed a string, so the reports went
-    to a single person. A shop has more than one person who needs to know a sale
-    happened or that a payment failed, and the honest way to widen that is to
-    accept a list rather than to make everyone share one account.
+def env_chat_ids() -> list[str]:
+    """The fallback list, from `TELEGRAM_CHAT_ID`.
 
     Comma or whitespace separated, so `123,-100456` and `123 -100456` both work.
-    A negative id is a group: adding the bot to a staff group and using its id
-    reaches everyone in it and keeps the list in Telegram rather than in `.env`.
+    Kept as the fallback rather than removed: it is what makes the bot able to
+    speak before anyone has opened the admin, and it is the only route left if
+    the database is unreachable — which is exactly when an alert matters most.
     """
     raw = (settings.telegram_chat_id or "").replace(",", " ")
     return [part for part in raw.split() if part]
+
+
+async def chat_ids() -> list[str]:
+    """Every chat a message should reach.
+
+    The list lives in the admin, because adding a colleague used to mean an SSH
+    session and an `.env` edit — so in practice nobody was ever added. Rows the
+    operator switched off are skipped without being deleted.
+
+    Falls back to the environment when the table is empty or cannot be read. A
+    reporting bot that goes silent because a query failed is worse than one that
+    writes to a slightly stale list, and the database being down is precisely the
+    moment somebody should be told something.
+    """
+    from sqlalchemy import select
+
+    from app.db.models import TelegramRecipient
+    from app.db.session import session_scope
+
+    try:
+        async with session_scope() as session:
+            rows = (
+                await session.execute(
+                    select(TelegramRecipient.chat_id).where(
+                        TelegramRecipient.is_active.is_(True)
+                    )
+                )
+            ).scalars().all()
+        if rows:
+            return [str(r) for r in rows]
+    except Exception as exc:  # noqa: BLE001 - falls back rather than failing
+        logger.warning("telegram.recipients_unreadable", error=str(exc))
+
+    return env_chat_ids()
 
 
 async def send_html(text: str, *, chat_id: str | None = None) -> None:
@@ -48,7 +78,7 @@ async def send_html(text: str, *, chat_id: str | None = None) -> None:
     report that failed to send should fail visibly in the worker log rather than
     look delivered.
     """
-    targets = [chat_id] if chat_id else chat_ids()
+    targets = [chat_id] if chat_id else await chat_ids()
     if not settings.telegram_bot_token or not targets:
         raise ServiceUnavailableError("Telegram is not configured")
 
@@ -94,7 +124,7 @@ async def send_support_message(
     Every field is escaped here because all of them are typed by a stranger, and
     the body is HTML by the time it reaches Telegram.
     """
-    if not settings.telegram_bot_token or not chat_ids():
+    if not settings.telegram_bot_token or not await chat_ids():
         raise ServiceUnavailableError("Support chat is being configured")
 
     body = (

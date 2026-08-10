@@ -41,9 +41,18 @@ def _restore_settings():
         ("  ", []),
     ],
 )
-def test_the_list_is_parsed(raw: str, expected: list[str]) -> None:
+def test_the_env_fallback_is_parsed(raw: str, expected: list[str]) -> None:
     settings.telegram_chat_id = raw
-    assert telegram.chat_ids() == expected
+    assert telegram.env_chat_ids() == expected
+
+
+def _fixed(ids: list[str]):
+    """Stand in for the database lookup with a known list."""
+
+    async def _ids() -> list[str]:
+        return ids
+
+    return _ids
 
 
 class _Response:
@@ -69,7 +78,9 @@ class _Client:
 
 
 async def test_every_recipient_gets_the_message(monkeypatch) -> None:
-    settings.telegram_chat_id = "111,222,333"
+    # Patched rather than seeded: these tests are about the fan-out, and the
+    # database lookup has its own test below.
+    monkeypatch.setattr(telegram, "chat_ids", _fixed(["111", "222", "333"]))
     client = _Client()
     monkeypatch.setattr(telegram, "get_client", lambda: client)
 
@@ -80,7 +91,7 @@ async def test_every_recipient_gets_the_message(monkeypatch) -> None:
 
 async def test_one_blocked_recipient_does_not_stop_the_others(monkeypatch) -> None:
     """The whole reason for the loop rather than a single call."""
-    settings.telegram_chat_id = "111,222"
+    monkeypatch.setattr(telegram, "chat_ids", _fixed(["111", "222"]))
     client = _Client(failing={"111"})
     monkeypatch.setattr(telegram, "get_client", lambda: client)
 
@@ -92,7 +103,7 @@ async def test_one_blocked_recipient_does_not_stop_the_others(monkeypatch) -> No
 
 async def test_total_failure_still_raises(monkeypatch) -> None:
     """Otherwise the worker would count an undelivered report as sent."""
-    settings.telegram_chat_id = "111,222"
+    monkeypatch.setattr(telegram, "chat_ids", _fixed(["111", "222"]))
     client = _Client(failing={"111", "222"})
     monkeypatch.setattr(telegram, "get_client", lambda: client)
 
@@ -100,7 +111,8 @@ async def test_total_failure_still_raises(monkeypatch) -> None:
         await telegram.send_html("<b>hi</b>")
 
 
-async def test_no_recipients_is_a_configuration_error() -> None:
+async def test_no_recipients_is_a_configuration_error(monkeypatch) -> None:
+    monkeypatch.setattr(telegram, "chat_ids", _fixed([]))
     settings.telegram_chat_id = ""
     with pytest.raises(ServiceUnavailableError):
         await telegram.send_html("<b>hi</b>")
@@ -108,7 +120,7 @@ async def test_no_recipients_is_a_configuration_error() -> None:
 
 async def test_support_requests_reach_the_whole_list(monkeypatch) -> None:
     """Support used to POST once with the raw string, so a list broke it."""
-    settings.telegram_chat_id = "111,222"
+    monkeypatch.setattr(telegram, "chat_ids", _fixed(["111", "222"]))
     client = _Client()
     monkeypatch.setattr(telegram, "get_client", lambda: client)
 
@@ -122,3 +134,53 @@ async def test_support_requests_reach_the_whole_list(monkeypatch) -> None:
     )
 
     assert client.sent == ["111", "222"]
+
+
+async def test_the_admin_list_wins_over_the_environment(monkeypatch) -> None:
+    """Adding a colleague must not require an SSH session and an .env edit.
+
+    Seeds two recipients, one switched off, and asserts only the live one is
+    used — and that the environment value is ignored while the table has rows.
+    """
+    import uuid
+
+    from app.db.models import TelegramRecipient
+    from app.db.session import session_scope
+
+    settings.telegram_chat_id = "999-from-env"
+    live = f"1{uuid.uuid4().int % 10**9}"
+    muted = f"2{uuid.uuid4().int % 10**9}"
+
+    async with session_scope() as session:
+        session.add(TelegramRecipient(chat_id=live, label="live", is_active=True))
+        session.add(TelegramRecipient(chat_id=muted, label="muted", is_active=False))
+        await session.commit()
+
+    try:
+        ids = await telegram.chat_ids()
+        assert live in ids
+        assert muted not in ids
+        assert "999-from-env" not in ids
+    finally:
+        from sqlalchemy import delete
+
+        async with session_scope() as session:
+            await session.execute(
+                delete(TelegramRecipient).where(TelegramRecipient.chat_id.in_([live, muted]))
+            )
+            await session.commit()
+
+
+async def test_an_empty_table_falls_back_to_the_environment() -> None:
+    """So the bot can speak before anyone has opened the admin."""
+    from sqlalchemy import delete
+
+    from app.db.models import TelegramRecipient
+    from app.db.session import session_scope
+
+    async with session_scope() as session:
+        await session.execute(delete(TelegramRecipient))
+        await session.commit()
+
+    settings.telegram_chat_id = "555"
+    assert await telegram.chat_ids() == ["555"]
