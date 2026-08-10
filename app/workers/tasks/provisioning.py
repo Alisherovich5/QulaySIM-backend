@@ -272,6 +272,15 @@ def fulfil_paid_order(self: Task, order_id: int) -> str:
     grant_referral_reward.delay(customer_id)
     grant_loyalty_cashback.delay(customer_id, order_id)
 
+    # Announce the sale to the operations chat. Delayed so the supplier has
+    # usually returned a profile by the time the message is built — the note
+    # reports whatever it finds, and "eSIM still coming" reads worse than it
+    # needs to when the profile lands two seconds later. Guarded against
+    # duplicates in the task itself, because this function retries.
+    from app.workers.tasks.reports import announce_sale
+
+    announce_sale.apply_async((order_id,), countdown=25)
+
     logger.info("fulfil.done", order_id=order_id, promo_redeemed=redeemed)
     return "ok"
 

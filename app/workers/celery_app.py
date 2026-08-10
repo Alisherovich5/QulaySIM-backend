@@ -86,4 +86,9 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=20, hour=2, day_of_month=1, month_of_year="1,4,7,10"),
         "args": (90,),
     },
+    "report-yearly": {
+        "task": "reports.send_period",
+        "schedule": crontab(minute=25, hour=2, day_of_month=1, month_of_year=1),
+        "args": (365,),
+    },
 }

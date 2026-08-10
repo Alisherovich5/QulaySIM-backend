@@ -31,6 +31,7 @@ PERIOD_LABELS = {
     7: "Haftalik hisobot",
     30: "Oylik hisobot",
     90: "3 oylik hisobot",
+    365: "Yillik hisobot",
 }
 
 
@@ -51,6 +52,11 @@ class PurchaseLine:
     bought_at: datetime
     expires_at: datetime | None
     paid_uzs: Decimal | None
+    # Read from the plan's own columns rather than parsed back out of its title.
+    # A title is a label a supplier chose; these are the numbers the customer
+    # bought, and the report is asked how many GB were sold.
+    data_mb: int = 0
+    days: int = 0
 
 
 #: How many individual sales a report lists before it summarises the rest.
@@ -66,6 +72,7 @@ class Report:
     until: datetime
 
     orders: int = 0
+    total_data_mb: int = 0
     revenue_usd: Decimal = ZERO
     revenue_uzs: Decimal = ZERO
     cost_usd: Decimal = ZERO
@@ -151,6 +158,12 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
         )
     ).scalar_one()
 
+    report.total_data_mb = session.execute(
+        select(func.coalesce(func.sum(ESIM.data_total_mb), 0)).where(
+            ESIM.order_id.in_(select(paid.c.id))
+        )
+    ).scalar_one()
+
     supplier_rows = session.execute(
         select(
             ESIM.provider,
@@ -194,6 +207,8 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
             bought_at=row[3],
             expires_at=row[4],
             paid_uzs=row[5],
+            data_mb=row[6] or 0,
+            days=row[7] or 0,
         )
         for row in session.execute(
             select(
@@ -203,6 +218,8 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
                 ESIM.created_at,
                 ESIM.expires_at,
                 Order.amount_uzs,
+                ESIM.data_total_mb,
+                ESIM.validity_days,
             )
             .join(Plan, Plan.id == ESIM.plan_id)
             .join(Country, Country.id == Plan.country_id, isouter=True)
@@ -223,6 +240,8 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
             bought_at=row[3],
             expires_at=row[4],
             paid_uzs=None,
+            data_mb=row[5] or 0,
+            days=row[6] or 0,
         )
         for row in session.execute(
             select(
@@ -231,6 +250,8 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
                 ESIM.provider,
                 ESIM.created_at,
                 ESIM.expires_at,
+                ESIM.data_total_mb,
+                ESIM.validity_days,
             )
             .join(Plan, Plan.id == ESIM.plan_id)
             .join(Country, Country.id == Plan.country_id, isouter=True)
@@ -298,6 +319,22 @@ def _escape(value: str) -> str:
     return html.escape(value)
 
 
+def _data(megabytes: int) -> str:
+    """Megabytes as the figure a customer recognises.
+
+    Whole gigabytes lose the decimal — "1 GB", not "1.0 GB" — and anything under
+    a gigabyte stays in megabytes rather than becoming "0.5 GB". Zero means an
+    unlimited plan, which has no number to show.
+    """
+    if megabytes <= 0:
+        return "cheksiz"
+    if megabytes % 1024 == 0:
+        return f"{megabytes // 1024} GB"
+    if megabytes < 1024:
+        return f"{megabytes} MB"
+    return f"{megabytes / 1024:.1f} GB"
+
+
 def _money(value: Decimal) -> str:
     return f"{value:,.2f}".replace(",", " ")
 
@@ -321,10 +358,13 @@ def format_report(report: Report) -> str:
     ]
 
     if report.orders:
+        # The two numbers the owner asked for first, on one line: how many people
+        # bought, and how much came in. Everything under it explains that line.
         lines += [
-            f"Xaridlar: <b>{report.orders} ta</b>",
-            f"Tushum: <b>{_som(report.revenue_uzs)} so'm</b> (${_money(report.revenue_usd)})",
-            f"Tannarx: ${_money(report.cost_usd)}",
+            f"<b>{report.buying_customers} odamga sotildi</b> · "
+            f"{report.orders} ta xarid · <b>{_som(report.revenue_uzs)} so'm</b>",
+            f"Jami hajm: <b>{_data(report.total_data_mb)}</b>",
+            f"Dollarda: ${_money(report.revenue_usd)} · tannarx ${_money(report.cost_usd)}",
             f"Foyda: <b>${_money(report.margin_usd)}</b> ({report.margin_percent}%)",
         ]
     else:
@@ -349,11 +389,13 @@ def format_report(report: Report) -> str:
                 if purchase.expires_at
                 else "faollashtirilmagan"
             )
-            price = f" · {_som(purchase.paid_uzs)} so'm" if purchase.paid_uzs is not None else ""
+            price = f" · <b>{_som(purchase.paid_uzs)} so'm</b>" if purchase.paid_uzs is not None else ""
+            size = _data(purchase.data_mb)
+            days = f" / {purchase.days} kun" if purchase.days else ""
             lines.append(
                 f"{purchase.bought_at.strftime('%d.%m %H:%M')} · "
-                f"<b>{_escape(purchase.country)}</b> {_escape(purchase.plan)} · "
-                f"{purchase.provider} · tugaydi {ends}{price}"
+                f"<b>{_escape(purchase.country)}</b> · {size}{days}{price} · "
+                f"{purchase.provider} · tugaydi {ends}"
             )
         if len(report.purchases) > MAX_LISTED:
             lines.append(f"<i>…va yana {len(report.purchases) - MAX_LISTED} ta</i>")
@@ -363,7 +405,7 @@ def format_report(report: Report) -> str:
         for item in report.expired[:MAX_LISTED]:
             ended = item.expires_at.strftime("%d.%m %H:%M") if item.expires_at else "—"
             lines.append(
-                f"{ended} · <b>{_escape(item.country)}</b> {_escape(item.plan)} · {item.provider}"
+                f"{ended} · <b>{_escape(item.country)}</b> · {_data(item.data_mb)} · {item.provider}"
             )
         if len(report.expired) > MAX_LISTED:
             lines.append(f"<i>…va yana {len(report.expired) - MAX_LISTED} ta</i>")
@@ -386,5 +428,79 @@ def format_report(report: Report) -> str:
 
     lines += ["", "<b>⚠️ MUAMMOLAR</b>"]
     lines += problems or ["Muammo yo'q."]
+
+    return "\n".join(lines)
+
+
+def build_sale_note(session: Session, order_id: int) -> str | None:
+    """One sale, as a message to send the moment it completes.
+
+    Returns None when the order is not a paid one, so a stray call cannot
+    announce a checkout that nobody paid for.
+
+    Reports what it finds rather than what it hopes: if the supplier has not
+    returned a profile yet, the message says the eSIM is still coming instead of
+    implying a delivery that has not happened.
+    """
+    order = session.get(Order, order_id)
+    if order is None or order.status != OrderStatus.PAID:
+        return None
+
+    rows = session.execute(
+        select(
+            Country.name,
+            Plan.title,
+            OrderItem.quantity,
+            OrderItem.unit_price,
+            OrderItem.unit_cost,
+            Plan.data_amount_mb,
+            Plan.validity_days,
+        )
+        .join(Plan, Plan.id == OrderItem.plan_id)
+        .join(Country, Country.id == Plan.country_id, isouter=True)
+        .where(OrderItem.order_id == order_id)
+    ).all()
+
+    esims = session.execute(
+        select(ESIM.provider, ESIM.iccid, ESIM.provider_esim_tran_no).where(
+            ESIM.order_id == order_id
+        )
+    ).all()
+
+    customer_email = session.execute(
+        select(Customer.email).where(Customer.id == order.customer_id)
+    ).scalar_one_or_none()
+
+    revenue = sum((row[3] or ZERO) * row[2] for row in rows) or ZERO
+    cost = sum((row[4] or ZERO) * row[2] for row in rows) or ZERO
+
+    lines = [
+        "<b>🎉 Yangi sotuv</b>",
+        f"Buyurtma <b>#{order_id}</b> · {order.paid_at.strftime('%d.%m.%Y %H:%M') if order.paid_at else ''}",
+        "",
+    ]
+    for row in rows:
+        country, _title, quantity, unit_price, _unit_cost, data_mb, days = row
+        count = f"{quantity} × " if quantity > 1 else ""
+        lines.append(
+            f"{count}<b>{_escape(country or '—')}</b> · {_data(data_mb)}"
+            f"{f' / {days} kun' if days else ''} · ${_money(unit_price or ZERO)}"
+        )
+
+    lines += [
+        "",
+        f"To'landi: <b>{_som(order.amount_uzs or ZERO)} so'm</b> (${_money(revenue)})",
+        f"Tannarx: ${_money(cost)} · Foyda: <b>${_money(revenue - cost)}</b>",
+    ]
+
+    if esims:
+        for provider, iccid, tran_no in esims:
+            state = "tayyor" if tran_no else "⏳ ta'minotchidan kutilmoqda"
+            lines.append(f"{provider} · ICCID {iccid} · {state}")
+    else:
+        lines.append("❗ eSIM hali berilmadi")
+
+    if customer_email:
+        lines.append(f"Mijoz: {_escape(customer_email)}")
 
     return "\n".join(lines)

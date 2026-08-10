@@ -251,3 +251,54 @@ async def test_the_message_fits_in_one_telegram_send() -> None:
     assert len(text) <= 4096, len(text)
     assert "MUAMMOLAR" in text
     assert "va yana" in text
+
+
+async def test_the_summary_leads_with_people_and_money() -> None:
+    """The two figures asked for first: who bought, and how much came in."""
+    with worker_session() as session:
+        _seed_sale(session, paid_at=NOW - timedelta(hours=1))
+        _seed_sale(session, paid_at=NOW - timedelta(hours=2))
+
+        report = build_report(session, days=1, now=NOW)
+
+    assert report.buying_customers == 2
+    text = format_report(report)
+    assert "2 odamga sotildi" in text
+    assert "59 998 so'm" in text
+
+
+async def test_volume_sold_is_reported_in_gigabytes() -> None:
+    """Two 3 GB plans are 6 GB, and it is written the way a customer reads it."""
+    with worker_session() as session:
+        _seed_sale(session, paid_at=NOW - timedelta(hours=1))
+        _seed_sale(session, paid_at=NOW - timedelta(hours=2))
+
+        report = build_report(session, days=1, now=NOW)
+
+    assert report.total_data_mb == 6144
+    assert "Jami hajm: <b>6 GB</b>" in format_report(report)
+
+
+async def test_an_unfulfilled_order_sold_no_gigabytes() -> None:
+    """Volume follows the eSIMs issued, not the money taken.
+
+    An order that charged and delivered nothing must not appear in the report as
+    data sold — that is the one number that would hide the failure.
+    """
+    with worker_session() as session:
+        _seed_sale(session, paid_at=NOW - timedelta(hours=1), with_esim=False)
+
+        report = build_report(session, days=1, now=NOW)
+
+    assert report.orders == 1
+    assert report.total_data_mb == 0
+
+
+async def test_each_purchase_shows_its_size_and_price() -> None:
+    with worker_session() as session:
+        _seed_sale(session, paid_at=NOW - timedelta(hours=1))
+
+        text = format_report(build_report(session, days=1, now=NOW))
+
+    assert "3 GB / 15 kun" in text
+    assert "29 999 so'm" in text
