@@ -44,6 +44,54 @@ async def list_regions(session: AsyncSession) -> list[Region]:
     return list(result.scalars().all())
 
 
+async def region_summaries(
+    session: AsyncSession,
+) -> list[tuple[Region, int, Decimal | None]]:
+    """Each region with its active country count and cheapest regional plan.
+
+    Two aggregates rather than a query per region: the list is rendered on the
+    destinations page, and a card per region each fetching its own count would be
+    a dozen round trips for a header.
+
+    A region with no regional plan of its own gets None, not zero — "from $0"
+    would advertise a price that does not exist.
+    """
+    regions = (
+        (await session.execute(select(Region).order_by(Region.sort_order, Region.name)))
+        .scalars()
+        .all()
+    )
+
+    counts = dict(
+        (
+            await session.execute(
+                select(Country.region_id, func.count(Country.id))
+                .where(Country.is_active.is_(True), Country.region_id.is_not(None))
+                .group_by(Country.region_id)
+            )
+        ).all()
+    )
+
+    # Only multi-country plans count towards the headline price. A region's
+    # cheapest *local* plan is a single-country eSIM and would undercut the
+    # regional one it is meant to advertise.
+    prices = dict(
+        (
+            await session.execute(
+                select(Plan.region_id, func.min(Plan.price_usd))
+                .where(
+                    Plan.is_active.is_(True),
+                    Plan.region_id.is_not(None),
+                    Plan.scope.in_(("regional", "global")),
+                )
+                .group_by(Plan.region_id)
+            )
+        ).all()
+    )
+
+    return [(r, counts.get(r.id, 0), prices.get(r.id)) for r in regions]
+
+
 async def list_countries(
     session: AsyncSession,
     *,

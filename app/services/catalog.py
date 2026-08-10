@@ -44,11 +44,12 @@ def _localise_country(model: CountryOut, country: Country, language: str) -> Non
 
 async def list_regions(session: AsyncSession, language: str = DEFAULT_LANGUAGE) -> JSONList:
     async def produce() -> JSONList:
-        regions = await repo.list_regions(session)
         out: JSONList = []
-        for region in regions:
+        for region, country_count, starting_price in await repo.region_summaries(session):
             model = RegionOut.model_validate(region)
             model.name = localise(region, "name", language)
+            model.country_count = country_count
+            model.starting_price = starting_price
             out.append(model.model_dump(mode="json"))
         return out
 

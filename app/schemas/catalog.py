@@ -7,6 +7,11 @@ class RegionOut(APIModel):
     id: int
     name: str
     slug: str
+    # How many countries one regional eSIM covers, and what the cheapest one
+    # costs. "Europe 5 GB" tells a traveller nothing about whether their stop is
+    # included; "55 countries, from $5" tells them everything they need to click.
+    country_count: int = 0
+    starting_price: Money | None = None
 
 
 class PlanOut(APIModel):
