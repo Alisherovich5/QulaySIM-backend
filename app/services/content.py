@@ -71,6 +71,7 @@ async def landing_content(session: AsyncSession, language: str) -> JSONDict:
                     strip_text=localise(promo, "strip_text", language),
                     discount_type=promo_code.discount_type if promo_code else None,
                     discount_value=promo_code.discount_value if promo_code else None,
+                    first_order_only=bool(promo_code.first_order_only) if promo_code else False,
                 )
                 if promo
                 else None

@@ -45,6 +45,10 @@ class PromoOut(APIModel):
     # site advertises and what checkout takes off are the same number.
     discount_type: str | None = None
     discount_value: Money | None = None
+    # Whether the linked code only works on a first order. The strip is hidden
+    # from customers who have already bought when this is set — advertising a
+    # discount that checkout will refuse is worse than not advertising it.
+    first_order_only: bool = False
 
 
 class LandingContentOut(APIModel):

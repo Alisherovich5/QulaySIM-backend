@@ -177,5 +177,15 @@ async def logout(
 
 
 @router.get("/me", response_model=CustomerOut)
-async def me(customer: CurrentCustomer) -> CustomerOut:
-    return CustomerOut.model_validate(customer)
+async def me(customer: CurrentCustomer, session: SessionDep) -> CustomerOut:
+    """The signed-in customer, plus whether they have bought before.
+
+    One extra count per call, on an endpoint the storefront hits once per page
+    load. It buys the difference between advertising the welcome discount to
+    everybody and advertising it only to people it still applies to.
+    """
+    from app.repositories import orders as order_repo
+
+    out = CustomerOut.model_validate(customer)
+    paid = await order_repo.count_paid_orders(session, customer.id)
+    return out.model_copy(update={"has_purchases": paid > 0})

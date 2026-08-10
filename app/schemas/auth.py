@@ -66,6 +66,11 @@ class CustomerOut(APIModel):
     email: str
     full_name: str
     created_at: datetime
+    # Whether this customer has ever paid for an order. Drives hiding the
+    # first-order promo strip; counted from paid orders rather than from eSIMs,
+    # because an order that was paid and never fulfilled has still spent the
+    # welcome discount.
+    has_purchases: bool = False
 
 
 class ProfileUpdateIn(APIModel):
