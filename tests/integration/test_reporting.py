@@ -62,6 +62,7 @@ def _seed_sale(
     with_esim: bool = True,
     expires_at: datetime | None = None,
     esim_status: str = ESIMStatus.ACTIVE,
+    complimentary: bool = False,
 ) -> Order:
     country = Country(
         name=f"Testland {uuid.uuid4().hex[:6]}",
@@ -101,6 +102,7 @@ def _seed_sale(
         exchange_rate=Decimal("11915.64"),
         created_at=paid_at,
         paid_at=paid_at if status == OrderStatus.PAID else None,
+        is_complimentary=complimentary,
     )
     session.add(order)
     session.flush()
@@ -302,3 +304,34 @@ async def test_each_purchase_shows_its_size_and_price() -> None:
 
     assert "3 GB / 15 kun" in text
     assert "29 999 so'm" in text
+
+
+async def test_a_giveaway_is_spend_not_revenue() -> None:
+    """A staff grant is marked paid so it fulfils like a sale — but nobody paid.
+
+    Counting it as revenue would report income that never arrived and flatter
+    every margin under it. It belongs in the report as what it is: stock that
+    went out with no money coming in.
+    """
+    with worker_session() as session:
+        _seed_sale(session, paid_at=NOW - timedelta(hours=1))
+        _seed_sale(session, paid_at=NOW - timedelta(hours=2), complimentary=True)
+
+        report = build_report(session, days=1, now=NOW)
+
+    assert report.orders == 1
+    assert report.revenue_usd == Decimal("2.50")
+    assert report.complimentary_count == 1
+    assert report.complimentary_cost_usd == Decimal("2.50")
+    assert "Sovg'a qilingan" in format_report(report)
+
+
+async def test_a_giveaway_does_not_count_as_a_buying_customer() -> None:
+    with worker_session() as session:
+        _seed_sale(session, paid_at=NOW - timedelta(hours=1), complimentary=True)
+
+        report = build_report(session, days=1, now=NOW)
+
+    assert report.buying_customers == 0
+    assert report.orders == 0
+    assert report.complimentary_count == 1

@@ -59,6 +59,9 @@ class Order(Base):
     discount: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     total: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=Decimal("0"))
     promo_code_id: Mapped[int | None] = mapped_column(ForeignKey("orders_promocode.id"))
+    # Given away by staff at our cost rather than sold. The reports read this:
+    # counted as spend, never as revenue, because nobody paid.
+    is_complimentary: Mapped[bool] = mapped_column(Boolean, default=False)
     # Frozen at checkout — see the Django model for why.
     amount_uzs: Mapped[Decimal | None] = mapped_column(Numeric(14, 2), nullable=True)
     exchange_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)

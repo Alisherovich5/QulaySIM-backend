@@ -85,6 +85,9 @@ class Report:
     new_customers: int = 0
     buying_customers: int = 0
 
+    complimentary_count: int = 0
+    complimentary_cost_usd: Decimal = ZERO
+
     unfulfilled_orders: list[int] = field(default_factory=list)
     underwater_plans: list[tuple[str, Decimal, Decimal]] = field(default_factory=list)
     stuck_esims: int = 0
@@ -116,6 +119,7 @@ class Report:
             or self.stuck_esims
             or self.expired
             or self.underwater_plans
+            or self.complimentary_count
         )
 
 
@@ -137,6 +141,10 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
             Order.paid_at.is_not(None),
             Order.paid_at >= since,
             Order.paid_at < until,
+            # A staff giveaway is marked paid so it fulfils like a sale, but
+            # nobody paid for it. Counting it as revenue would report income
+            # that never arrived and quietly flatter every margin below.
+            Order.is_complimentary.is_(False),
         )
         .subquery()
     )
@@ -298,6 +306,19 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
         )
     ).scalar_one()
 
+    # Giveaways: what they cost, kept apart from sales. Money went out and none
+    # came in, which is worth seeing rather than hiding inside the margin.
+    grants = session.execute(
+        select(func.count(Order.id), func.coalesce(func.sum(Order.total), ZERO)).where(
+            Order.status == OrderStatus.PAID,
+            Order.is_complimentary.is_(True),
+            Order.paid_at.is_not(None),
+            Order.paid_at >= since,
+            Order.paid_at < until,
+        )
+    ).one()
+    report.complimentary_count, report.complimentary_cost_usd = grants
+
     # Plans whose wholesale cost has caught up with or passed our price. These
     # are refused at checkout rather than sold at a loss, so each one is a tariff
     # quietly not selling — which only shows up here. Locked prices are the usual
@@ -390,6 +411,12 @@ def format_report(report: Report) -> str:
         ]
     else:
         lines.append("Bu davrda xarid bo'lmadi.")
+
+    if report.complimentary_count:
+        lines.append(
+            f"Sovg'a qilingan: <b>{report.complimentary_count} ta</b> "
+            f"(tannarx ${_money(report.complimentary_cost_usd)}, tushum yo'q)"
+        )
 
     if report.suppliers:
         lines += ["", "<b>🔌 TA'MINOTCHILAR</b>"]
