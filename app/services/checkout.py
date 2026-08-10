@@ -18,7 +18,7 @@ from app.schemas.commerce import CartItemIn
 logger = get_logger(__name__)
 
 
-def _to_rule(promo: PromoCode | None) -> PromoRule | None:
+def _to_rule(promo: PromoCode | None, *, paid_orders: int | None = None) -> PromoRule | None:
     if promo is None:
         return None
     return PromoRule(
@@ -30,7 +30,25 @@ def _to_rule(promo: PromoCode | None) -> PromoRule | None:
         is_active=promo.is_active,
         valid_until=promo.valid_until,
         min_order_usd=promo.min_order_usd or Decimal("0"),
+        first_order_only=promo.first_order_only,
+        customer_paid_orders=paid_orders,
     )
+
+
+def sells_at_a_loss(plan) -> bool:
+    """Whether this plan would lose money at its current price.
+
+    Compared against the plan's live cost rather than a snapshot, because the
+    question is what the wholesaler charges *now* — a sale about to happen is
+    paid for at today's cost, not the one recorded when the price was set.
+
+    A plan with no known cost is not judged: zero is what an unsynced row holds,
+    and treating "unknown" as "free" would mark the whole catalogue profitable.
+    """
+    cost = plan.cost_usd
+    if cost is None or cost <= Decimal("0"):
+        return False
+    return plan.price_usd <= cost
 
 
 def is_fulfillable(plan) -> bool:
@@ -90,6 +108,23 @@ async def price_cart(
                 offers=len(getattr(plan, "offers", None) or []),
             )
             raise DomainError(f"Plan {item.plan_id} is temporarily unavailable")
+        if sells_at_a_loss(plan):
+            # The wholesaler raised its price above ours. Nothing recomputes a
+            # plan whose price the operator locked, so without this the shop
+            # keeps selling it and pays the difference on every order — quietly,
+            # because a loss looks exactly like a sale until someone reconciles.
+            #
+            # Refusing is the conservative half of the fix: the plan stops
+            # selling rather than silently repricing under a customer who is
+            # already at checkout. The report names it so it gets repriced.
+            logger.error(
+                "checkout.plan_below_cost",
+                plan_id=plan.id,
+                title=plan.title,
+                price_usd=str(plan.price_usd),
+                cost_usd=str(plan.cost_usd),
+            )
+            raise DomainError(f"Plan {item.plan_id} is temporarily unavailable")
         lines.append(
             PricedLine(
                 plan_id=plan.id,
@@ -106,7 +141,19 @@ async def price_cart(
         else None
     )
 
+    # Counted only when it can change the answer. An anonymous quote has no
+    # customer to count for, and a first-order-only code cannot be honoured
+    # without knowing — so it is refused rather than granted, which is the safe
+    # direction for a discount.
+    paid_orders = None
+    if promo is not None and promo.first_order_only and customer_id is not None:
+        paid_orders = await order_repo.count_paid_orders(session, customer_id)
+
     try:
-        return build_quote(lines, _to_rule(promo), promo_requested=bool(promo_code))
+        return build_quote(
+            lines,
+            _to_rule(promo, paid_orders=paid_orders),
+            promo_requested=bool(promo_code),
+        )
     except PricingError as exc:
         raise DomainError(str(exc)) from exc

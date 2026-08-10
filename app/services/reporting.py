@@ -86,6 +86,7 @@ class Report:
     buying_customers: int = 0
 
     unfulfilled_orders: list[int] = field(default_factory=list)
+    underwater_plans: list[tuple[str, Decimal, Decimal]] = field(default_factory=list)
     stuck_esims: int = 0
     abandoned_checkouts: int = 0
 
@@ -114,6 +115,7 @@ class Report:
             or self.unfulfilled_orders
             or self.stuck_esims
             or self.expired
+            or self.underwater_plans
         )
 
 
@@ -296,6 +298,25 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
         )
     ).scalar_one()
 
+    # Plans whose wholesale cost has caught up with or passed our price. These
+    # are refused at checkout rather than sold at a loss, so each one is a tariff
+    # quietly not selling — which only shows up here. Locked prices are the usual
+    # cause: nothing reprices them when a supplier moves.
+    report.underwater_plans = [
+        (row[0], row[1], row[2])
+        for row in session.execute(
+            select(Plan.title, Plan.price_usd, Plan.cost_usd)
+            .where(
+                Plan.is_active.is_(True),
+                Plan.cost_usd.is_not(None),
+                Plan.cost_usd > 0,
+                Plan.price_usd <= Plan.cost_usd,
+            )
+            .order_by((Plan.cost_usd - Plan.price_usd).desc())
+            .limit(MAX_LISTED)
+        ).all()
+    ]
+
     # Checkout opened and never paid. Not a failure on its own, but a number
     # that climbing means the payment step is losing people.
     report.abandoned_checkouts = session.execute(
@@ -423,6 +444,13 @@ def format_report(report: Report) -> str:
         problems.append(f"❗ To'landi, eSIM berilmadi: <b>{len(report.unfulfilled_orders)}</b> ({ids})")
     if report.stuck_esims:
         problems.append(f"❗ eSIM berildi, lekin o'rnatib bo'lmaydi: <b>{report.stuck_esims}</b>")
+    if report.underwater_plans:
+        problems.append(
+            f"❗ Tannarxi narxdan oshgan tarif: <b>{len(report.underwater_plans)}</b> "
+            "(sotilmayapti, narxini ko'tarish kerak)"
+        )
+        for title, price, cost in report.underwater_plans[:5]:
+            problems.append(f"   · {_escape(title)}: ${_money(price)} ← tannarx ${_money(cost)}")
     if report.abandoned_checkouts:
         problems.append(f"To'lovga o'tib, to'lamaganlar: {report.abandoned_checkouts}")
 

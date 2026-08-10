@@ -44,6 +44,12 @@ class PromoRule:
     # 0 means no floor. Checked against the subtotal, so a fixed discount cannot
     # be spent on a cart smaller than the discount itself.
     min_order_usd: Decimal = ZERO
+    first_order_only: bool = False
+    #: Paid orders this customer already has. Only consulted when the code is
+    #: first-order-only; None means the caller did not establish it, which is
+    #: treated as "not eligible" rather than waved through — a discount rule
+    #: that fails open is a discount rule that does not exist.
+    customer_paid_orders: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +93,8 @@ def validate_promo(
         return "Promo code usage limit reached"
     if subtotal is not None and promo.min_order_usd > ZERO and subtotal < promo.min_order_usd:
         return f"This code applies to orders of ${promo.min_order_usd:g} or more"
+    if promo.first_order_only and (promo.customer_paid_orders or 0) > 0:
+        return "This code is for your first order"
     return None
 
 

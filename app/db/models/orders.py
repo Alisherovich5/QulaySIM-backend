@@ -42,6 +42,10 @@ class PromoCode(Base):
     issued_to_id: Mapped[int | None] = mapped_column(
         ForeignKey("customers_customer.id"), nullable=True
     )
+    # Redeemable only by someone who has never paid. WELCOME10 is advertised as
+    # a discount on your first eSIM and applied to every later one too, so the
+    # same customer kept getting 10% off indefinitely.
+    first_order_only: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
