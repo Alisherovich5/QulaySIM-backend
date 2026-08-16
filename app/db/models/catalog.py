@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -69,6 +69,20 @@ class Plan(Base):
     # parsed: every calculation reads price_usd, so this can say anything
     # without putting arithmetic at risk.
     price_note: Mapped[str] = mapped_column(String(120), default="")
+    # ISO2 codes a multi-country plan covers, comma separated. Django owns
+    # the column; this mirrors it so the worldwide page can answer "is my
+    # country in this bundle?" before the customer pays.
+    coverage_iso2: Mapped[str] = mapped_column(Text, default="")
+
+    @property
+    def coverage(self) -> list[str]:
+        """The covered countries as a list, for the API to render.
+
+        A plain column read, so it is safe during response serialisation — the
+        rule here is that anything a schema touches must not reach a lazy
+        relationship, which is what turned a property into a 500 once before.
+        """
+        return [code for code in self.coverage_iso2.split(",") if code]
     network_type: Mapped[str] = mapped_column(String(2), default="4G")
     supports_hotspot: Mapped[bool] = mapped_column(Boolean, default=True)
     provider: Mapped[str] = mapped_column(String(20), default="mock")

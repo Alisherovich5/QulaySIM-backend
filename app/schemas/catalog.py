@@ -25,6 +25,9 @@ class PlanOut(APIModel):
     price_usd: Money
     # Empty for almost every plan; the storefront renders it only when set.
     price_note: str = ""
+    # Which countries a multi-country plan covers. Empty for a single-country
+    # tariff, where the destination page already answers the question.
+    coverage: list[str] = []
     network_type: str
     supports_hotspot: bool
     is_popular: bool
