@@ -162,7 +162,9 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
     # Cost comes from the line snapshot. Rows sold before `unit_cost` existed
     # carry NULL; they are counted as zero cost rather than dropped, which
     # overstates margin on old rows instead of hiding the sale entirely.
-    report.cost_usd = session.execute(
+    # coalesce() guarantees a value, but the column is nullable so the type is
+    # optional; ZERO keeps the report's arithmetic on Decimal.
+    report.cost_usd = session.execute(  # type: ignore[assignment]
         select(func.coalesce(func.sum(OrderItem.unit_cost * OrderItem.quantity), ZERO)).where(
             OrderItem.order_id.in_(select(paid.c.id))
         )
@@ -481,8 +483,10 @@ def format_report(report: Report) -> str:
             f"❗ Tannarxi narxdan oshgan tarif: <b>{len(report.underwater_plans)}</b> "
             "(sotilmayapti, narxini ko'tarish kerak)"
         )
-        for title, price, cost in report.underwater_plans[:5]:
-            problems.append(f"   · {_escape(title)}: ${_money(price)} ← tannarx ${_money(cost)}")
+        for title, under_price, under_cost in report.underwater_plans[:5]:
+            problems.append(
+                f"   · {_escape(title)}: ${_money(under_price)} ← tannarx ${_money(under_cost)}"
+            )
     if report.abandoned_checkouts:
         problems.append(f"To'lovga o'tib, to'lamaganlar: {report.abandoned_checkouts}")
 

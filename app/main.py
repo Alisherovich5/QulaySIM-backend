@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,7 +50,7 @@ def _init_error_reporting() -> None:
 
         from app.core.logging import _mask
 
-        def scrub(event: dict, _hint: dict) -> dict:
+        def scrub(event: dict[str, Any], _hint: dict[str, Any]) -> dict[str, Any]:
             request = event.get("request") or {}
             request.pop("cookies", None)
             headers = request.get("headers") or {}

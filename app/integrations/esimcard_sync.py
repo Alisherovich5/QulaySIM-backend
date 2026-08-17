@@ -18,6 +18,7 @@ do not care which wholesaler served the order.
 
 from __future__ import annotations
 
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy.orm import Session, joinedload
@@ -62,7 +63,7 @@ def _local_status(supplier_status: str) -> str:
     return _STATUS_MAP.get(supplier_status.strip().lower(), "pending")
 
 
-def _plan_for(row, items_by_id: dict, plans_by_code: dict):
+def _plan_for(row: Any, items_by_id: dict[Any, Any], plans_by_code: dict[Any, Any]) -> Any:
     """The plan this purchase was for, by item id, falling back to the code."""
     item_id, _, _ = row.line_key.partition(":")
     if item_id.isdigit():

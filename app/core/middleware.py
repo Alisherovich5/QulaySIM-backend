@@ -6,9 +6,11 @@ import hashlib
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import cast
 
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import StreamingResponse
 
 from app.core.config import settings
 from app.core.logging import get_logger, request_id_var
@@ -146,7 +148,14 @@ class CacheHeadersMiddleware(BaseHTTPMiddleware):
         if response.status_code != 200:
             return response
 
-        body = b"".join([chunk async for chunk in response.body_iterator])
+        # `body_iterator` lives on Starlette's streaming response, which is
+        # what every route here actually returns; the base class does not
+        # declare it.
+        streaming = cast(StreamingResponse, response)
+        chunks = [chunk async for chunk in streaming.body_iterator]
+        body = b"".join(
+            chunk.encode() if isinstance(chunk, str) else bytes(chunk) for chunk in chunks
+        )
         headers = dict(response.headers)
         headers["Cache-Control"] = _CATALOG_CACHE
         # Catalogue answers are translated, so a cache that ignored the language

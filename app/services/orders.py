@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 from decimal import ROUND_HALF_UP, Decimal
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -87,7 +88,7 @@ async def _replay(cache_key: str) -> dict[str, object] | None:
     for field in ("total_usd", "amount_uzs", "exchange_rate"):
         if payload.get(field) is not None:
             payload[field] = Decimal(str(payload[field]))
-    return payload
+    return cast("dict[str, object]", payload)
 
 
 async def place_order(

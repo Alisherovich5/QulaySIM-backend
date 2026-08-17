@@ -52,8 +52,14 @@ def synchronise_supplier_order(self: Task, order_id: int) -> int:
             from app.integrations.esim_access import EsimAccessError as SupplierSyncError
             from app.integrations.esim_access import sync_order_profiles
         elif order.provider == "esimcard":
-            from app.integrations.esimcard import EsimCardError as SupplierSyncError
-            from app.integrations.esimcard_sync import sync_order_profiles
+            # Same names, different suppliers — the branch picks one pair, and
+            # mypy cannot express "either of these two shapes" here.
+            from app.integrations.esimcard import (  # type: ignore[assignment]
+                EsimCardError as SupplierSyncError,
+            )
+            from app.integrations.esimcard_sync import (  # type: ignore[assignment]
+                sync_order_profiles,
+            )
         else:
             logger.error(
                 "provisioning.no_sync_for_provider",

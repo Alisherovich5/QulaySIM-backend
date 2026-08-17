@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +36,7 @@ def _to_rule(promo: PromoCode | None, *, paid_orders: int | None = None) -> Prom
     )
 
 
-def sells_at_a_loss(plan) -> bool:
+def sells_at_a_loss(plan: Any) -> bool:
     """Whether this plan would lose money at its current price.
 
     Compared against the plan's live cost rather than a snapshot, because the
@@ -48,10 +49,10 @@ def sells_at_a_loss(plan) -> bool:
     cost = plan.cost_usd
     if cost is None or cost <= Decimal("0"):
         return False
-    return plan.price_usd <= cost
+    return bool(plan.price_usd <= cost)
 
 
-def is_fulfillable(plan) -> bool:
+def is_fulfillable(plan: Any) -> bool:
     """Whether any wholesaler we can order from could actually supply this plan.
 
     Checkout's last line of defence, and the one that has to hold: everything

@@ -85,7 +85,9 @@ class EsimCardClient:
     def is_configured(self) -> bool:
         return bool(settings.esimcard_api_token)
 
-    def _request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict:
+    def _request(
+        self, method: str, path: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         if not self.is_configured:
             raise EsimCardError("eSIMCard API token is not configured")
 

@@ -102,7 +102,7 @@ async def collect(sample: Sample, request: Request) -> Response:
 @router.get("/rum/summary", include_in_schema=False)
 async def summary(
     days: Annotated[int, Field(ge=1, le=14)] = 7,
-) -> dict[str, dict[str, float | int]]:
+) -> dict[str, dict[str, object]]:
     """p75 per metric per device, which is the number the targets are set on.
 
     An average hides the tail, and the tail is the visitor who leaves. Open
@@ -112,7 +112,9 @@ async def summary(
     redis = get_redis()
     seconds = (await redis.time())[0]
     today = int(seconds) // 86400
-    out: dict[str, dict[str, float | int]] = {}
+    # p75 is either a bucket edge or the string "over", which is honest about
+    # the resolution — hence `object` rather than a number.
+    out: dict[str, dict[str, object]] = {}
     for metric in ("LCP", "INP", "CLS", "TTFB", "FCP"):
         for device in ("phone", "desktop"):
             counts: dict[str, int] = {}

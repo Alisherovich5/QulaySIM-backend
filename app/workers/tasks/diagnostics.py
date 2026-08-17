@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import time
 
+from celery import Task
+
 from app.core.logging import get_logger
 from app.workers.celery_app import celery_app
 
@@ -23,7 +25,7 @@ logger = get_logger("diagnostics")
 
 
 @celery_app.task(name="diagnostics.slow_noop", bind=True)
-def slow_noop(self, seconds: int = 20, label: str = "drill") -> dict[str, object]:
+def slow_noop(self: Task, seconds: int = 20, label: str = "drill") -> dict[str, object]:
     """Occupy a worker for a while, touching nothing.
 
     Returns the attempt number, which is the whole point: a second attempt with

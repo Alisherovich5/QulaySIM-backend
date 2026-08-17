@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 
 import redis
+from celery import Task
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -32,7 +33,7 @@ logger = get_logger(__name__)
 
 
 @celery_app.task(name="reports.send_period", bind=True, max_retries=3, default_retry_delay=300)
-def send_period_report(self, days: int) -> str:
+def send_period_report(self: Task, days: int) -> str:
     """Build the report for the last `days` and post it.
 
     Retries on delivery failure rather than dropping the report: Telegram being
@@ -87,7 +88,7 @@ def _claim_announcement(order_id: int) -> bool:
 
 
 @celery_app.task(name="reports.announce_sale", bind=True, max_retries=3, default_retry_delay=120)
-def announce_sale(self, order_id: int) -> str:
+def announce_sale(self: Task, order_id: int) -> str:
     """Post a message the moment a sale completes.
 
     Scheduled with a short delay by the fulfilment task so the supplier has

@@ -142,7 +142,8 @@ def _retake(db: Session, row_id: int) -> bool:
         .where(SupplierPurchase.id == row_id, SupplierPurchase.state == FAILED)
         .values(state=CLAIMED)
     )
-    return bool(result.rowcount)
+    # rowcount is on the DBAPI cursor result; the typed Result façade hides it.
+    return bool(result.rowcount)  # type: ignore[attr-defined]
 
 
 def settle(

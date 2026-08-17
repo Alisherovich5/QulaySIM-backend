@@ -60,7 +60,9 @@ def _mask_text(value: str) -> str:
     return value
 
 
-def _mask(_logger: object, _name: str, event_dict: dict) -> dict:
+def _mask(
+    _logger: object, _name: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
     """Keep credentials and personal data out of the log file.
 
     Logs are read by more people than the database is, they are copied into chat

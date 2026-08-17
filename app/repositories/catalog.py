@@ -62,20 +62,25 @@ async def region_summaries(
         .all()
     )
 
-    counts = dict(
+    # region_id can be NULL for a country with no region, hence the optional key.
+    # `.tuples()` rather than the Row objects: dict() wants pairs, and a Row is
+    # only pair-shaped by accident of iteration.
+    counts: dict[int | None, int] = dict(
         (
             await session.execute(
                 select(Country.region_id, func.count(Country.id))
                 .where(Country.is_active.is_(True), Country.region_id.is_not(None))
                 .group_by(Country.region_id)
             )
-        ).all()
+        )
+        .tuples()
+        .all()
     )
 
     # Only multi-country plans count towards the headline price. A region's
     # cheapest *local* plan is a single-country eSIM and would undercut the
     # regional one it is meant to advertise.
-    prices = dict(
+    prices: dict[int | None, Decimal] = dict(
         (
             await session.execute(
                 select(Plan.region_id, func.min(Plan.price_usd))
@@ -86,7 +91,9 @@ async def region_summaries(
                 )
                 .group_by(Plan.region_id)
             )
-        ).all()
+        )
+        .tuples()
+        .all()
     )
 
     return [(r, counts.get(r.id, 0), prices.get(r.id)) for r in regions]
