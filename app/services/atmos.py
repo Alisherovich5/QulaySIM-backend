@@ -40,7 +40,6 @@ STATUS_REJECTED = "rejected"
 _DIGEST = hashlib.md5
 
 
-
 async def _ensure_fulfilment(session: AsyncSession, order_id: int) -> None:
     """Dispatch provisioning for an order that has no eSIM yet.
 
@@ -70,6 +69,7 @@ async def _ensure_fulfilment(session: AsyncSession, order_id: int) -> None:
         return
     logger.info("atmos.refulfil", order_id=order_id)
     fulfil_paid_order.delay(order_id)
+
 
 def _ok(message: str = "Успешно") -> dict[str, Any]:
     return {"status": 1, "message": message}

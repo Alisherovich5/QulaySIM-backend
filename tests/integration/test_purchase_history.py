@@ -58,9 +58,7 @@ async def _seed(status: str) -> tuple[Customer, Order]:
         await session.flush()
 
         session.add(
-            OrderItem(
-                order_id=order.id, plan_id=plan_id, unit_price=Decimal("1.00"), quantity=1
-            )
+            OrderItem(order_id=order.id, plan_id=plan_id, unit_price=Decimal("1.00"), quantity=1)
         )
         session.add(
             ESIM(

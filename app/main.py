@@ -184,8 +184,7 @@ def _sitemap_entries(
     the same block of xhtml:link elements is repeated under each <loc>.
     """
     alternates = [
-        f'<xhtml:link rel="alternate" hreflang="{lang}" '
-        f'href="{_localised_url(base, path, lang)}"/>'
+        f'<xhtml:link rel="alternate" hreflang="{lang}" href="{_localised_url(base, path, lang)}"/>'
         for lang in SITEMAP_LANGS
     ]
     alternates.append(
@@ -247,14 +246,18 @@ def _register_sitemap(app: FastAPI) -> None:
                 from app.db.models import Region
 
                 region_rows = (
-                    await session.execute(
-                        select(Region.slug)
-                        .join(Country, Country.region_id == Region.id)
-                        .where(Country.is_active.is_(True))
-                        .group_by(Region.slug)
-                        .order_by(Region.slug)
+                    (
+                        await session.execute(
+                            select(Region.slug)
+                            .join(Country, Country.region_id == Region.id)
+                            .where(Country.is_active.is_(True))
+                            .group_by(Region.slug)
+                            .order_by(Region.slug)
+                        )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 rows = (
                     await session.execute(
                         select(Country.slug, func.max(SupplierOffer.updated_at))

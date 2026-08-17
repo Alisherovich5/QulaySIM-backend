@@ -96,9 +96,7 @@ def rejection(password: str, *, email: str = "", full_name: str = "") -> Rejecti
 
     # A password that is mostly one repeated character survives a length check.
     if len(set(password)) < 4:
-        return Rejection(
-            CODE_TOO_REPETITIVE, "Password is too repetitive — please choose another"
-        )
+        return Rejection(CODE_TOO_REPETITIVE, "Password is too repetitive — please choose another")
 
     # Reusing the e-mail or name means one leak compromises both.
     local_part = email.split("@", 1)[0].lower() if email else ""

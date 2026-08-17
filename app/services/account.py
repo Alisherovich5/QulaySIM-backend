@@ -21,10 +21,7 @@ from app.schemas.base import JSONDict
 logger = get_logger(__name__)
 
 
-
-async def summary(
-    session: AsyncSession, customer: Customer, *, language: str = "en"
-) -> JSONDict:
+async def summary(session: AsyncSession, customer: Customer, *, language: str = "en") -> JSONDict:
     rows = await order_repo.account_summary_rows(session, customer.id, language=language)
     passport = rows["passport"]
     return {

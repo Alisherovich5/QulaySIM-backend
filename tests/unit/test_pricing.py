@@ -174,8 +174,9 @@ class TestMinimumOrder:
 
         from app.domain.pricing import validate_promo
 
-        assert validate_promo(self._rule(min_order_usd=Decimal("0")),
-                              subtotal=Decimal("0.50")) is None
+        assert (
+            validate_promo(self._rule(min_order_usd=Decimal("0")), subtotal=Decimal("0.50")) is None
+        )
 
     def test_omitting_the_subtotal_skips_the_check(self):
         # Callers that only vet the code itself must keep working.
@@ -188,8 +189,7 @@ class TestMinimumOrder:
 
         from app.domain.pricing import PricedLine, build_quote
 
-        line = PricedLine(plan_id=1, title="Turkey 1 GB", unit_price=Decimal("1.99"),
-                          quantity=1)
+        line = PricedLine(plan_id=1, title="Turkey 1 GB", unit_price=Decimal("1.99"), quantity=1)
         quote = build_quote([line], self._rule(), promo_requested=True)
         assert quote.promo_applied is False
         assert quote.discount == Decimal("0")
@@ -201,10 +201,8 @@ class TestMinimumOrder:
 
         from app.domain.pricing import PricedLine, build_quote
 
-        line = PricedLine(plan_id=1, title="Turkey 1 GB", unit_price=Decimal("1.99"),
-                          quantity=1)
-        quote = build_quote([line], self._rule(min_order_usd=Decimal("0")),
-                            promo_requested=True)
+        line = PricedLine(plan_id=1, title="Turkey 1 GB", unit_price=Decimal("1.99"), quantity=1)
+        quote = build_quote([line], self._rule(min_order_usd=Decimal("0")), promo_requested=True)
         # Documented, not desired: the clamp keeps the total at zero rather than
         # negative, and the minimum is the only thing that prevents this.
         assert quote.total == Decimal("0")

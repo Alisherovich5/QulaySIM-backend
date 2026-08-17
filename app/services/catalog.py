@@ -132,6 +132,7 @@ async def get_region(
     countries actually wants. Same shape on purpose, so the storefront renders a
     region page with the component it already has for a destination.
     """
+
     async def produce() -> JSONDict:
         region = await repo.get_region_by_slug(session, slug)
         if region is None:
@@ -186,9 +187,7 @@ async def invalidate_catalog(slugs: list[str] | None = None) -> int:
     Redis but leaves the CDN holding the old number for an hour is worse than no
     caching, because it is wrong in a way nobody can see from here.
     """
-    cleared = await invalidate(
-        "qs:regions*", "qs:countries*", "qs:country*", "qs:popular_plans*"
-    )
+    cleared = await invalidate("qs:regions*", "qs:countries*", "qs:country*", "qs:popular_plans*")
     from app.integrations.cloudflare import is_configured, purge_catalogue
 
     if is_configured():

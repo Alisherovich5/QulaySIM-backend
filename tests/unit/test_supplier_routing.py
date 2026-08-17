@@ -83,9 +83,7 @@ class TestRouteSelection:
 
         # Ordering the right price against the wrong code would deliver the
         # wrong eSIM, so the code has to travel with the route.
-        assert routes[0].lines == (
-            SupplierLine(package_code="tur-5gb-30d", quantity=1, item_id=1),
-        )
+        assert routes[0].lines == (SupplierLine(package_code="tur-5gb-30d", quantity=1, item_id=1),)
 
     def test_unavailable_offer_is_not_a_route(self):
         plan = FakePlan(

@@ -169,8 +169,11 @@ class Recorder:
 
 def _place(factory, order_id: int, recorder: Recorder, *, lines: list[SupplierLine]):
     supplier = EsimCardSupplier()
-    with factory() as session, __import__("unittest.mock", fromlist=["patch"]).patch(
-        "app.integrations.esimcard.EsimCardClient", lambda **_: recorder.client()
+    with (
+        factory() as session,
+        __import__("unittest.mock", fromlist=["patch"]).patch(
+            "app.integrations.esimcard.EsimCardClient", lambda **_: recorder.client()
+        ),
     ):
         return supplier.place_order(
             db=session, order_id=order_id, transaction_id=f"qs-{order_id}", lines=lines
@@ -263,8 +266,7 @@ class TestPartialFailure:
 
         with session_factory() as session:
             rows = {
-                r.line_key: r.state
-                for r in session.execute(select(SupplierPurchase)).scalars()
+                r.line_key: r.state for r in session.execute(select(SupplierPurchase)).scalars()
             }
         assert rows[f"{item_id}:1"] == ledger.DONE
         assert rows[f"{item_id}:2"] == ledger.FAILED

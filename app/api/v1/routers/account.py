@@ -95,6 +95,7 @@ async def submit_testimonial(
         text=payload.text,
     )
 
+
 @router.post("/avatar", response_model=AccountSummaryOut)
 async def upload_avatar(
     session: SessionDep,

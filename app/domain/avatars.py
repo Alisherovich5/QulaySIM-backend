@@ -114,9 +114,7 @@ def build(raw: bytes) -> Avatar:
     if width < 1 or height < 1:
         raise AvatarRejectedError("avatar_not_an_image", "That image has no content.")
     if width * height > MAX_SOURCE_PIXELS:
-        raise AvatarRejectedError(
-            "avatar_too_many_pixels", "That image is too large to process."
-        )
+        raise AvatarRejectedError("avatar_too_many_pixels", "That image is too large to process.")
 
     try:
         probe.load()

@@ -173,9 +173,7 @@ class TestLinkingAnExistingAccount:
 class TestRefusals:
     async def test_a_disabled_account_cannot_be_entered_through_google(self, session, as_google):
         email = _email()
-        await _existing_customer(
-            session, email, password="a-long-enough-password", active=False
-        )
+        await _existing_customer(session, email, password="a-long-enough-password", active=False)
         as_google(_identity(email))
 
         with pytest.raises(AuthenticationError):

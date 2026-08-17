@@ -223,9 +223,7 @@ class TestOrderPlacement:
     async def test_placement_freezes_the_som_amount(self, paid_order: dict) -> None:
         assert paid_order["amount_uzs"] > 0
         assert paid_order["exchange_rate"] > 0
-        converted = Decimal(
-            str(round(paid_order["total_usd"] * paid_order["exchange_rate"], 2))
-        )
+        converted = Decimal(str(round(paid_order["total_usd"] * paid_order["exchange_rate"], 2)))
         # Not the raw conversion: the amount is rounded down to the figure the
         # storefront showed while the customer was choosing. Asserting equality
         # with `charm_uzs` rather than a hand-written number keeps this test

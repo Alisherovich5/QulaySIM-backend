@@ -340,14 +340,10 @@ def routes_for(order: Order) -> list[Route]:
             if offer is None:  # pragma: no cover - excluded by the intersection
                 break
             code, cost = offer
-            lines.append(
-                SupplierLine(package_code=code, quantity=item.quantity, item_id=item.id)
-            )
+            lines.append(SupplierLine(package_code=code, quantity=item.quantity, item_id=item.id))
             total += cost * item.quantity
         else:
-            routes.append(
-                Route(provider=provider, lines=tuple(lines), total_cost_usd=total)
-            )
+            routes.append(Route(provider=provider, lines=tuple(lines), total_cost_usd=total))
 
     # Cheapest first, provider name only to keep the order stable between runs.
     routes.sort(key=lambda route: (route.total_cost_usd, route.provider))

@@ -45,8 +45,7 @@ class TestRefusalIsNotSuccess:
                 json={
                     "status": False,
                     "message": (
-                        "Insufficient Wallet Balance, please refill your wallet "
-                        "and try again"
+                        "Insufficient Wallet Balance, please refill your wallet and try again"
                     ),
                 },
             )

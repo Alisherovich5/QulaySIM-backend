@@ -83,6 +83,7 @@ class Plan(Base):
         relationship, which is what turned a property into a 500 once before.
         """
         return [code for code in self.coverage_iso2.split(",") if code]
+
     network_type: Mapped[str] = mapped_column(String(2), default="4G")
     supports_hotspot: Mapped[bool] = mapped_column(Boolean, default=True)
     provider: Mapped[str] = mapped_column(String(20), default="mock")

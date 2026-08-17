@@ -70,8 +70,9 @@ class TestRefused:
         self._refuses(svg, "avatar_not_an_image")
 
     def test_a_file_over_the_size_cap(self):
-        self._refuses(b"\x89PNG\r\n\x1a\n" + b"\x00" * (avatars.MAX_UPLOAD_BYTES + 1),
-                      "avatar_too_large")
+        self._refuses(
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * (avatars.MAX_UPLOAD_BYTES + 1), "avatar_too_large"
+        )
 
     def test_a_polyglot_with_a_script_appended(self):
         # Valid PNG followed by script: it decodes, so it is accepted — and the

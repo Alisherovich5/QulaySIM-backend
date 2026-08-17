@@ -77,7 +77,11 @@ async def purge_catalogue(slugs: list[str] | None = None) -> int:
     an edge holding yesterday's HTML would show yesterday's price even with the
     API purged.
     """
-    base = str(settings.site_url).rstrip("/") if hasattr(settings, "site_url") else "https://qulaysim.uz"
+    base = (
+        str(settings.site_url).rstrip("/")
+        if hasattr(settings, "site_url")
+        else "https://qulaysim.uz"
+    )
     urls = [
         f"{base}/api/countries",
         f"{base}/api/regions",

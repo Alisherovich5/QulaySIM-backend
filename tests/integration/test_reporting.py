@@ -45,6 +45,7 @@ def worker_session():
     finally:
         engine.dispose()
 
+
 # Far enough ahead that no row left behind by another test file — they all
 # carry real timestamps — can fall inside a window under test. Combined with
 # never committing, that makes every count below exactly what this test seeded.

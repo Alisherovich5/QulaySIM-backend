@@ -53,12 +53,16 @@ async def chat_ids() -> list[str]:
     try:
         async with session_scope() as session:
             rows = (
-                await session.execute(
-                    select(TelegramRecipient.chat_id).where(
-                        TelegramRecipient.is_active.is_(True)
+                (
+                    await session.execute(
+                        select(TelegramRecipient.chat_id).where(
+                            TelegramRecipient.is_active.is_(True)
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         if rows:
             return [str(r) for r in rows]
     except Exception as exc:  # noqa: BLE001 - falls back rather than failing

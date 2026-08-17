@@ -100,9 +100,7 @@ def _seed(session, *, tran_no: str = TRAN_NO, provider: str = "esimaccess") -> E
 
 
 def _run(monkeypatch, client: FakeClient) -> int:
-    monkeypatch.setattr(
-        "app.integrations.esim_access.EsimAccessClient", lambda *a, **k: client
-    )
+    monkeypatch.setattr("app.integrations.esim_access.EsimAccessClient", lambda *a, **k: client)
     return maintenance.refresh_esim_usage()
 
 

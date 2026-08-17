@@ -429,9 +429,7 @@ class TestSitemapAndRobots:
         for path in ("/destinations", "/device-check", "/support", "/esim-nima", "/esim-ornatish"):
             assert f"<loc>https://qulaysim.uz{path}</loc>" in body, path
 
-    async def test_every_page_is_listed_in_all_three_languages(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_every_page_is_listed_in_all_three_languages(self, client: AsyncClient) -> None:
         """Uzbek at the root, Russian and English under a prefix.
 
         A language edition that is not in the sitemap is one Google has to
@@ -444,9 +442,7 @@ class TestSitemapAndRobots:
             assert f"<loc>https://qulaysim.uz/ru{path}</loc>" in body, f"ru {path}"
             assert f"<loc>https://qulaysim.uz/en{path}</loc>" in body, f"en {path}"
 
-    async def test_the_home_page_keeps_its_trailing_slash(
-        self, client: AsyncClient
-    ) -> None:
+    async def test_the_home_page_keeps_its_trailing_slash(self, client: AsyncClient) -> None:
         """It has to match the canonical the front end renders, byte for byte.
 
         src/lib/seo.ts advertises "https://qulaysim.uz/". A sitemap that says
@@ -474,9 +470,7 @@ class TestSitemapAndRobots:
         for entry in entries:
             loc = re.search(r"<loc>([^<]+)</loc>", entry)
             assert loc is not None
-            alternates = dict(
-                re.findall(r'hreflang="([\w-]+)" href="([^"]+)"', entry)
-            )
+            alternates = dict(re.findall(r'hreflang="([\w-]+)" href="([^"]+)"', entry))
             assert set(alternates) == {"uz", "ru", "en", "x-default"}, loc.group(1)
             assert loc.group(1) in alternates.values(), (
                 f"{loc.group(1)} is absent from its own alternate set"
@@ -491,10 +485,14 @@ class TestSitemapAndRobots:
 
         async with SessionFactory() as session:
             active = (
-                await session.execute(
-                    select(Country.slug).where(Country.is_active.is_(True)).limit(3)
+                (
+                    await session.execute(
+                        select(Country.slug).where(Country.is_active.is_(True)).limit(3)
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         if not active:
             pytest.skip("catalogue is empty; run scripts.seed")
 
@@ -511,9 +509,7 @@ class TestSitemapAndRobots:
 
         async with SessionFactory() as session:
             country = (
-                await session.execute(
-                    select(Country).where(Country.is_active.is_(True)).limit(1)
-                )
+                await session.execute(select(Country).where(Country.is_active.is_(True)).limit(1))
             ).scalar_one_or_none()
             if country is None:
                 pytest.skip("catalogue is empty; run scripts.seed")
@@ -686,7 +682,8 @@ class TestAvatar:
         first = await self._auth(client)
         second = await self._auth(client)
         await client.post(
-            "/api/account/avatar", headers=first,
+            "/api/account/avatar",
+            headers=first,
             files={"file": ("me.png", self._png(), "image/png")},
         )
         # The endpoint takes no id — it always acts on the caller — so the second

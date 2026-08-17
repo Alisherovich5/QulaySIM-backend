@@ -63,6 +63,7 @@ async def test_recovery_is_not_blocked_by_the_cached_fallback(monkeypatch) -> No
     With the six-hour TTL this test would still see the fallback, which is
     precisely the failure — the shop stayed closed after the cause was gone.
     """
+
     async def down(_url):
         raise RateUnavailableError("cbu unreachable")
 

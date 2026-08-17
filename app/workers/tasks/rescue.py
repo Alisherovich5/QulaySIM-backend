@@ -57,18 +57,15 @@ def rescue_unfulfilled_orders() -> dict[str, int]:
 
     now = datetime.now(UTC)
     with worker_session() as session:
-        stale = (
-            session.execute(
-                select(Order.id, Order.paid_at, Order.created_at)
-                .where(
-                    Order.status == OrderStatus.PAID,
-                    ~select(ESIM.id).where(ESIM.order_id == Order.id).exists(),
-                )
-                .order_by(Order.id)
-                .limit(MAX_PER_RUN + 1)
+        stale = session.execute(
+            select(Order.id, Order.paid_at, Order.created_at)
+            .where(
+                Order.status == OrderStatus.PAID,
+                ~select(ESIM.id).where(ESIM.order_id == Order.id).exists(),
             )
-            .all()
-        )
+            .order_by(Order.id)
+            .limit(MAX_PER_RUN + 1)
+        ).all()
 
     overflow = max(0, len(stale) - MAX_PER_RUN)
     stale = stale[:MAX_PER_RUN]

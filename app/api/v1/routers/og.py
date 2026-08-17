@@ -48,8 +48,9 @@ async def og_card(
     if png is None:
         row = (
             await session.execute(
-                select(Country.name, Country.name_uz)
-                .where(Country.slug == slug, Country.is_active.is_(True))
+                select(Country.name, Country.name_uz).where(
+                    Country.slug == slug, Country.is_active.is_(True)
+                )
             )
         ).first()
         if row is None:

@@ -50,9 +50,7 @@ def _line(price: str = "10.00") -> PricedLine:
 
 
 def test_a_first_time_buyer_gets_the_discount() -> None:
-    quote = build_quote(
-        [_line()], _rule(customer_paid_orders=0), promo_requested=True, now=NOW
-    )
+    quote = build_quote([_line()], _rule(customer_paid_orders=0), promo_requested=True, now=NOW)
     assert quote.promo_applied is True
     assert quote.discount == Decimal("1.00")
     assert quote.total == Decimal("9.00")
@@ -60,9 +58,7 @@ def test_a_first_time_buyer_gets_the_discount() -> None:
 
 def test_a_returning_buyer_does_not() -> None:
     """The bug: this used to discount the second purchase too."""
-    quote = build_quote(
-        [_line()], _rule(customer_paid_orders=1), promo_requested=True, now=NOW
-    )
+    quote = build_quote([_line()], _rule(customer_paid_orders=1), promo_requested=True, now=NOW)
     assert quote.promo_applied is False
     assert quote.discount == Decimal("0")
     assert quote.total == Decimal("10.00")
@@ -84,9 +80,7 @@ def test_an_anonymous_visitor_still_sees_the_advertised_discount() -> None:
     counts their paid orders. A returning customer therefore never gets the
     discount on an order, whatever an anonymous quote showed them earlier.
     """
-    quote = build_quote(
-        [_line()], _rule(customer_paid_orders=None), promo_requested=True, now=NOW
-    )
+    quote = build_quote([_line()], _rule(customer_paid_orders=None), promo_requested=True, now=NOW)
     assert quote.promo_applied is True
 
 

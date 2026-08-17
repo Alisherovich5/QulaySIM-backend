@@ -350,9 +350,7 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
         if pinned:
             routes = [route for route in routes if route.provider == pinned]
             if not routes:
-                logger.error(
-                    "fulfil.pinned_provider_unusable", order_id=order_id, provider=pinned
-                )
+                logger.error("fulfil.pinned_provider_unusable", order_id=order_id, provider=pinned)
                 return False
 
         if not routes:
@@ -416,9 +414,7 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
             )
             return True
 
-        logger.error(
-            "fulfil.every_supplier_refused", order_id=order_id, routes=len(routes)
-        )
+        logger.error("fulfil.every_supplier_refused", order_id=order_id, routes=len(routes))
         if last_error is not None:
             raise last_error
         return False

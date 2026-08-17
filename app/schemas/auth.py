@@ -78,6 +78,7 @@ class ProfileUpdateIn(APIModel):
     current_password: str | None = None
     new_password: str | None = Field(default=None, min_length=MIN_PASSWORD_LENGTH, max_length=128)
 
+
 class GoogleIn(APIModel):
     """The credential Google Identity Services hands the browser."""
 
@@ -87,6 +88,7 @@ class GoogleIn(APIModel):
 
 class ProvidersOut(APIModel):
     """Which social buttons to render, and with what public client id."""
+
     # The rule the API enforces, published so the form can enforce the same one.
     # It was copied into Register.tsx with a comment asking whoever changed it to
     # remember this file — which is the kind of arrangement that holds until the
