@@ -1,7 +1,10 @@
 name: CI
 
 on:
-  push: {branches: [main, senior-architecture]}
+  # Every branch we deploy from, not just main. The branch this shop actually
+  # runs on was not being tested at all, which meant a local test failure and a
+  # real one looked the same from here.
+  push: {branches: [main, senior-architecture, payme-integration, production-cleanup]}
   pull_request:
 
 concurrency:

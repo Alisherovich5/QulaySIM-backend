@@ -26,7 +26,7 @@ async def quote(
     # one. Limited per address and per signed-in customer, so sharing an office
     # NAT does not lock a real buyer out of their own account.
     if payload.promo_code:
-        await enforce("promo_ip", client_ip(request), settings.rate_limit_promo)
+        await enforce("promo_ip", client_ip(request), settings.rate_limit_promo_ip)
         if customer:
             await enforce("promo_user", str(customer.id), settings.rate_limit_promo)
     result = await service.price_cart(

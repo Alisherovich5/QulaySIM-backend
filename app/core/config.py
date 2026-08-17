@@ -59,8 +59,17 @@ class Settings(BaseSettings):
     rate_limit_login: str = "30/300"
     rate_limit_register: str = "20/3600"
     rate_limit_support: str = "3/300"
-    # Ten attempts a minute: generous for someone typing a code they were
-    # given, useless for walking a keyspace.
+    # Promo-code attempts, and the two limits do different jobs.
+    #
+    # Per address is deliberately loose: mobile operators here put thousands of
+    # customers behind one CGNAT address, so a tight per-IP ceiling would lock
+    # real buyers out of a code they were given because a stranger on the same
+    # carrier typed one first. Sixty a minute still makes a script slow.
+    #
+    # Per signed-in customer is where the tight limit belongs — one person cannot
+    # legitimately try ten codes a minute, and an attacker who signs in to
+    # enumerate has given us an account to rate-limit and to ban.
+    rate_limit_promo_ip: str = "60/60"
     rate_limit_promo: str = "10/60"
     # A page reports at most a handful of metrics; 60 a minute leaves room for a
     # customer opening several tabs without becoming an amplifier.
