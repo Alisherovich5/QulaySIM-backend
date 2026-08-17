@@ -126,9 +126,7 @@ class TestTopUpIsPaidFor:
         """
         paths = set(app.openapi()["paths"])
         granting = [
-            path
-            for path in paths
-            if path.startswith("/api/account") and path.endswith("/topup")
+            path for path in paths if path.startswith("/api/account") and path.endswith("/topup")
         ]
         assert granting == [], sorted(paths)
 
