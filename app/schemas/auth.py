@@ -87,6 +87,11 @@ class GoogleIn(APIModel):
 
 class ProvidersOut(APIModel):
     """Which social buttons to render, and with what public client id."""
+    # The rule the API enforces, published so the form can enforce the same one.
+    # It was copied into Register.tsx with a comment asking whoever changed it to
+    # remember this file — which is the kind of arrangement that holds until the
+    # day it matters.
+    min_password_length: int = MIN_PASSWORD_LENGTH
 
     google_client_id: str = ""
 

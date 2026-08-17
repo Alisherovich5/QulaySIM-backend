@@ -179,7 +179,18 @@ async def list_popular_plans(
     )
 
 
-async def invalidate_catalog() -> int:
-    return await invalidate(
+async def invalidate_catalog(slugs: list[str] | None = None) -> int:
+    """Clear our cache, and the edge's.
+
+    One function rather than two calls at every site: a price change that clears
+    Redis but leaves the CDN holding the old number for an hour is worse than no
+    caching, because it is wrong in a way nobody can see from here.
+    """
+    cleared = await invalidate(
         "qs:regions*", "qs:countries*", "qs:country*", "qs:popular_plans*"
     )
+    from app.integrations.cloudflare import is_configured, purge_catalogue
+
+    if is_configured():
+        await purge_catalogue(slugs)
+    return cleared

@@ -22,6 +22,7 @@ celery_app = Celery(
     include=[
         "app.workers.tasks.provisioning",
         "app.workers.tasks.maintenance",
+        "app.workers.tasks.diagnostics",
         "app.workers.tasks.rescue",
         "app.workers.tasks.reports",
     ],

@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     sentry_dsn: str = ""
     #: Fraction of requests traced. Errors are always sent; traces cost money.
     sentry_traces_sample_rate: float = 0.0
+
+    # Edge cache. Empty means there is no edge yet, and every call below turns
+    # into a no-op — the catalogue's Cache-Control headers already carry
+    # `s-maxage`, so the day a CDN is put in front it starts caching without any
+    # further change, and this is what tells it a price moved.
+    cloudflare_zone_id: str = ""
+    cloudflare_api_token: str = ""
     rate_limit_default: str = "120/60"
 
     # --- Cache TTLs --------------------------------------------------------

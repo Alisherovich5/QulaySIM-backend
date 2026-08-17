@@ -160,8 +160,11 @@ async def providers() -> ProvidersOut:
     """
     from app.integrations import google_auth
 
+    from app.domain.passwords import MIN_LENGTH
+
     return ProvidersOut(
-        google_client_id=settings.google_client_id if google_auth.is_configured() else ""
+        google_client_id=settings.google_client_id if google_auth.is_configured() else "",
+        min_password_length=MIN_LENGTH,
     )
 
 
