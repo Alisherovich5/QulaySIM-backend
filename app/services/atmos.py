@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.base import utcnow
-from app.db.models import AtmosTransaction, Order, Payment
+from app.db.models import AtmosTransaction, ESIM, Order, Payment
 from app.db.models.enums import OrderStatus
 
 logger = get_logger(__name__)
@@ -39,6 +39,29 @@ STATUS_REJECTED = "rejected"
 # sandbox disagrees, this constant is the single thing to change.
 _DIGEST = hashlib.md5
 
+
+
+async def _ensure_fulfilment(session: AsyncSession, order_id: int) -> None:
+    """Dispatch provisioning for an order that has no eSIM yet.
+
+    Called on the replay paths as well as the first confirmation. A repeat
+    callback is correct to answer OK for the *payment*, and it used to stop
+    there — so if the first callback committed the charge and then lost its
+    dispatch (Redis unreachable for a moment, or the task exhausting its
+    retries), the retry that ATMOS helpfully sent changed nothing and the
+    customer stayed paid-up with no eSIM until somebody read a daily report.
+
+    Fulfilment is idempotent, so dispatching again costs a no-op at worst.
+    """
+    from app.workers.tasks.provisioning import fulfil_paid_order
+
+    has_esim = (
+        await session.execute(select(ESIM.id).where(ESIM.order_id == order_id).limit(1))
+    ).first()
+    if has_esim:
+        return
+    logger.info("atmos.refulfil", order_id=order_id)
+    fulfil_paid_order.delay(order_id)
 
 def _ok(message: str = "Успешно") -> dict[str, Any]:
     return {"status": 1, "message": message}
@@ -103,6 +126,9 @@ async def handle_callback(session: AsyncSession, payload: dict[str, Any]) -> dic
     )
     if existing is not None:
         if existing.status == STATUS_CONFIRMED:
+            # The payment is settled; the eSIM may not be. See _ensure_fulfilment.
+            if account.isdigit():
+                await _ensure_fulfilment(session, int(account))
             return _ok()
         return _refuse("Transaction was rejected")
 
@@ -140,6 +166,7 @@ async def handle_callback(session: AsyncSession, payload: dict[str, Any]) -> dic
         # Paid already (perhaps via a racing callback that committed first):
         # honest replay only if it was this very transaction.
         if order.status == OrderStatus.PAID and order.provider_transaction_id == transaction_id:
+            await _ensure_fulfilment(session, order.id)
             return _ok()
         await record(STATUS_REJECTED)
         return _refuse("Order is not payable")

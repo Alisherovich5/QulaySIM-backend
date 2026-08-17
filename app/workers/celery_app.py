@@ -22,6 +22,7 @@ celery_app = Celery(
     include=[
         "app.workers.tasks.provisioning",
         "app.workers.tasks.maintenance",
+        "app.workers.tasks.rescue",
         "app.workers.tasks.reports",
     ],
 )
@@ -44,6 +45,13 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
+    # The safety net under a paid order. Every five minutes, because the
+    # customer is the one waiting and the daily report is twenty-four hours too
+    # late for money that has already changed hands.
+    "rescue-unfulfilled-orders": {
+        "task": "rescue.unfulfilled_orders",
+        "schedule": crontab(minute="*/5"),
+    },
     "expire-elapsed-esims": {
         "task": "maintenance.expire_esims",
         "schedule": crontab(minute="*/15"),
