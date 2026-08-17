@@ -136,3 +136,54 @@ async def summary(
                     break
             out[f"{metric}.{device}"] = {"samples": total, "p75": p75}
     return out
+
+
+class ClientError(BaseModel):
+    """A crash that happened in a customer's browser."""
+
+    # The message and the top of the stack are enough to find the bug; a full
+    # stack from a minified bundle is mostly noise, and a long one is a place
+    # for personal data to hide.
+    message: str = Field(max_length=300)
+    source: str = Field(default="", max_length=200)
+    route: str = Field(default="", max_length=64, pattern=r"^[a-z0-9/_:-]*$")
+    # Which build it came from, so a fixed bug stops being counted.
+    build: str = Field(default="", max_length=40)
+
+
+@router.post(
+    "/client-errors",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(RateLimit("client_errors", settings.rate_limit_rum))],
+    include_in_schema=False,
+)
+async def client_error(report: ClientError) -> Response:
+    """Record a browser-side crash.
+
+    Deliberately not the Sentry browser SDK. That is ~30 KB on every page load,
+    on a connection where a round trip costs 350 ms, to catch an event that
+    happens to a small fraction of visitors — and the size budget the same review
+    asked for would have been spent on it. This costs a few hundred bytes and
+    reports the same three things that actually get a bug fixed.
+
+    Masked through the same rule as the server logs: a message string is exactly
+    where an email address or a token ends up by accident.
+    """
+    from app.core.logging import _mask
+
+    safe = _mask(None, "", report.model_dump())
+    # Logged at error level so it lands wherever the server's errors land —
+    # including Sentry, when a DSN is configured, without a second SDK.
+    logger.error("client.error", **safe)
+    try:
+        redis = get_redis()
+        seconds = (await redis.time())[0]
+        day = int(seconds) // 86400
+        key = f"qs:client_errors:{day}"
+        pipe = redis.pipeline()
+        pipe.hincrby(key, f"{safe.get('message', '')[:120]} @ {safe.get('route', '')}", 1)
+        pipe.expire(key, _TTL)
+        await pipe.execute()
+    except Exception:  # noqa: BLE001
+        pass
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

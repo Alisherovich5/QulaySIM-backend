@@ -15,3 +15,4 @@ python-decouple>=3.8
 Pillow>=10.0
 # HEIC/HEIF decode for iPhone photos — registered in app/domain/avatars.py.
 pillow-heif>=0.16
+sentry-sdk[fastapi]==2.20.0

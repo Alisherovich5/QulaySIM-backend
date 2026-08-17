@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     # A page reports at most a handful of metrics; 60 a minute leaves room for a
     # customer opening several tabs without becoming an amplifier.
     rate_limit_rum: str = "60/60"
+
+    # Error reporting. Empty means off — the code paths below are written so an
+    # unconfigured install behaves exactly as it did before, because a
+    # monitoring dependency that can break a shop is worse than no monitoring.
+    sentry_dsn: str = ""
+    #: Fraction of requests traced. Errors are always sent; traces cost money.
+    sentry_traces_sample_rate: float = 0.0
     rate_limit_default: str = "120/60"
 
     # --- Cache TTLs --------------------------------------------------------

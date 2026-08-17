@@ -29,6 +29,49 @@ from app.core.logging import configure_logging, get_logger
 from app.core.middleware import register_middleware
 
 configure_logging(settings.log_level, json_output=settings.is_production)
+
+
+def _init_error_reporting() -> None:
+    """Send crashes somewhere a person will see them — if a DSN is configured.
+
+    Off by default and silent about it. A shop that cannot start because its
+    monitoring is misconfigured is a worse outcome than a shop with no
+    monitoring, so every failure here is swallowed after one log line.
+
+    `send_default_pii` stays off and the event scrubber runs the same masking the
+    logs use: an exception's local variables are exactly where a card number or a
+    token would otherwise be shipped to a third party.
+    """
+    if not settings.sentry_dsn:
+        return
+    try:
+        import sentry_sdk
+
+        from app.core.logging import _mask
+
+        def scrub(event: dict, _hint: dict) -> dict:
+            request = event.get("request") or {}
+            request.pop("cookies", None)
+            headers = request.get("headers") or {}
+            for name in list(headers):
+                if name.lower() in ("authorization", "cookie", "x-api-key"):
+                    headers[name] = "[maskalangan]"
+            if isinstance(event.get("extra"), dict):
+                event["extra"] = _mask(None, "", event["extra"])
+            return event
+
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment="production" if settings.is_production else "development",
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            send_default_pii=False,
+            before_send=scrub,
+        )
+    except Exception:  # noqa: BLE001 — see the docstring
+        get_logger("startup").warning("sentry.init_failed")
+
+
+_init_error_reporting()
 logger = get_logger(__name__)
 
 
