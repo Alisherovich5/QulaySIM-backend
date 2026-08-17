@@ -86,6 +86,12 @@ jobs:
           pip install -r requirements.txt
           python manage.py migrate --noinput
 
+      # The integration tests need a catalogue to sell from. Without this they
+      # fail with "seed the catalogue first", which looks like a broken test and
+      # is really a missing fixture — twelve failures that said nothing.
+      - name: Seed the catalogue
+        run: python -m scripts.seed
+
       - name: Tests
         run: pytest --cov=app --cov-report=term-missing --cov-fail-under=70
 
