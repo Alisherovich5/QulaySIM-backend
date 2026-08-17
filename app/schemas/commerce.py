@@ -96,3 +96,30 @@ class OrderPlacedOut(APIModel):
     amount_uzs: Money
     exchange_rate: Money
     payment_url: str
+
+
+class TopUpOut(APIModel):
+    """One purchasable top-up for one eSIM.
+
+    The cost is deliberately absent: this goes to a browser, and what we pay the
+    wholesaler is nobody's business but ours.
+    """
+
+    package_code: str
+    data_label: str
+    data_mb: int
+    validity_days: int
+    price_usd: Money
+    price_uzs: Money
+
+
+class TopUpIn(APIModel):
+    """Which eSIM, and which package.
+
+    No price: the amount is re-read from the wholesaler when the order is placed,
+    so a figure sent from a browser could only ever be ignored or trusted, and
+    trusting it is how a customer pays yesterday's price.
+    """
+
+    esim_id: int
+    package_code: str

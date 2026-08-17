@@ -10,6 +10,7 @@ from app.schemas.commerce import (
     QuoteIn,
     QuoteLineOut,
     QuoteOut,
+    TopUpIn,
 )
 from app.services import checkout as service
 from app.services import orders as order_service
@@ -82,6 +83,28 @@ async def place_order(
         payload.promo_code,
         idempotency_key=idempotency_key,
     )
+    return OrderPlacedOut.model_validate(placed)
+
+
+@router.post("/topup", response_model=OrderPlacedOut, status_code=status.HTTP_201_CREATED)
+async def place_topup(
+    payload: TopUpIn,
+    session: SessionDep,
+    customer: CurrentCustomer,
+) -> OrderPlacedOut:
+    """Buy extra data for an eSIM the customer already owns.
+
+    Separate from the cart on purpose. A top-up is bound to one profile, is priced
+    from a quote the wholesaler gave seconds ago, and carries no promo code — put
+    through the cart it would need three exceptions in code that decides what a
+    customer pays.
+
+    The price is not accepted from the request: it is re-read from the wholesaler
+    here, so what is charged is what they will honour now.
+    """
+    from app.services import topup_orders
+
+    placed = await topup_orders.place(session, customer, payload.esim_id, payload.package_code)
     return OrderPlacedOut.model_validate(placed)
 
 

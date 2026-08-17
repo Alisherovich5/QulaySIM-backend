@@ -90,6 +90,12 @@ class OrderItem(Base):
     # rows sold before this column existed have no snapshot to claim.
     unit_cost: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     quantity: Mapped[int] = mapped_column(Integer, default=1)
+    # Which eSIM a top-up line adds data to. Django owns the column; mirrored here
+    # because fulfilment reads it to know whose profile to fill.
+    esim_id: Mapped[int | None] = mapped_column(ForeignKey("orders_esim.id"), nullable=True)
+    # A top-up order creates no eSIM row, so this is the only proof it arrived —
+    # and what the paid-but-undelivered sweep reads for these lines.
+    topup_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     order: Mapped[Order] = relationship(back_populates="items")
     plan: Mapped[Plan] = relationship()

@@ -104,26 +104,60 @@ class TestActivation:
             await service.activate_esim(session, attacker, esim.id)
 
 
-class TestTopUpIsGone:
-    """Topping up was free and fictional, so the route no longer exists.
+class TestTopUpIsPaidFor:
+    """Topping up exists again — as a purchase this time.
 
-    The old tests asserted that pressing it raised the allowance — which it did,
-    without charging anyone and without telling the supplier, so the customer
-    ended up holding a number they could not spend. They passed on behaviour
-    that should never have shipped, which is why they are replaced rather than
-    fixed. What is asserted now is the absence: no endpoint, and no service
-    function behind it for a future caller to rediscover.
+    The first version raised the allowance for free: no charge, no supplier call,
+    so the customer held a number they could not spend. Those tests were deleted
+    along with the feature, and what replaced them was an assertion of absence.
+
+    Absence is no longer the invariant; *payment* is. A top-up now goes through an
+    order, a payment provider and the wholesaler, exactly like a first purchase.
+    So these assert the two things that must never come back: no route that grants
+    data directly, and no service function that adds megabytes without a supplier
+    confirming it.
     """
 
-    async def test_the_endpoint_is_not_routed(self) -> None:
-        # Routers are included rather than flattened, so `app.routes` holds
-        # wrappers without a `path`; the generated schema is the reliable list
-        # of what is actually reachable.
-        paths = set(app.openapi()["paths"])
-        assert not any(path.endswith("/topup") for path in paths), sorted(paths)
+    async def test_the_account_router_cannot_grant_data(self) -> None:
+        """Listing what is available is fine; adding data is not.
 
-    async def test_the_service_no_longer_offers_it(self) -> None:
+        `/account/esims/{id}/topups` is a read. The only writer is the checkout
+        path, which cannot finish without a payment.
+        """
+        paths = set(app.openapi()["paths"])
+        granting = [
+            path
+            for path in paths
+            if path.startswith("/api/account") and path.endswith("/topup")
+        ]
+        assert granting == [], sorted(paths)
+
+    async def test_the_account_service_no_longer_offers_it(self) -> None:
         assert not hasattr(service, "topup_esim")
+
+    async def test_the_purchase_path_needs_a_signed_in_customer(self) -> None:
+        from httpx import ASGITransport, AsyncClient
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+            response = await client.post(
+                "/api/checkout/topup", json={"esim_id": 1, "package_code": "TOPUP_X"}
+            )
+        assert response.status_code == 401
+
+    async def test_data_is_only_added_after_the_supplier_confirms(self) -> None:
+        """The one ordering rule in fulfilment.
+
+        `_apply_topups` calls the wholesaler and only then writes the new
+        allowance — the reverse would tell a customer they have 5 GB more when
+        nothing was bought, and a retry can fix a missing update but cannot take
+        back a promise.
+        """
+        import inspect
+
+        from app.workers.tasks import provisioning
+
+        source = inspect.getsource(provisioning._apply_topups)
+        assert source.index("client.topup(") < source.index("esim.data_total_mb =")
 
 
 class TestProfile:

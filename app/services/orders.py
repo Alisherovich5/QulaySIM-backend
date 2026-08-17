@@ -209,10 +209,26 @@ async def place_order(
 
 
 async def _payment_url(order_id: int, amount_uzs: Decimal, quote: Quote) -> str:
+    """The link the customer pays at, for a cart."""
+    return await _payment_url_for_lines(
+        order_id,
+        amount_uzs,
+        [(line.title, line.unit_price, line.quantity) for line in quote.lines],
+    )
+
+
+async def _payment_url_for_lines(
+    order_id: int, amount_uzs: Decimal, lines: list[tuple[str, Decimal, int]]
+) -> str:
     """The link the customer pays at, from whichever provider is live.
 
     Built after the order is committed so a provider hiccup can never leave a
     paid-for order unrecorded — the customer just retries the checkout.
+
+    Takes plain lines rather than a Quote so a top-up order, which has no cart and
+    no promo code, goes through exactly the same invoice code. Two implementations
+    of "what the invoice says" is how a fiscal receipt ends up disagreeing with
+    the amount charged.
     """
     amount_tiyin = int((amount_uzs * 100).to_integral_value())
     if settings.payment_provider == "atmos":
@@ -224,7 +240,7 @@ async def _payment_url(order_id: int, amount_uzs: Decimal, quote: Quote) -> str:
         # line absorbs the rounding remainder. The discount, if any, spreads
         # itself across the lines the same way, which is also what the tax
         # receipt should say.
-        line_totals = [line.unit_price * line.quantity for line in quote.lines]
+        line_totals = [price * quantity for _title, price, quantity in lines]
         grand = sum(line_totals) or 1
         shares = [int(amount_tiyin * (t / grand)) for t in line_totals]
         shares[-1] += amount_tiyin - sum(shares)
@@ -232,8 +248,8 @@ async def _payment_url(order_id: int, amount_uzs: Decimal, quote: Quote) -> str:
             account=str(order_id),
             amount_tiyin=amount_tiyin,
             lines=[
-                {"name": line.title, "amount_tiyin": share, "quantity": line.quantity}
-                for line, share in zip(quote.lines, shares, strict=True)
+                {"name": title, "amount_tiyin": share, "quantity": quantity}
+                for (title, _price, quantity), share in zip(lines, shares, strict=True)
             ],
         )
     return checkout_url(

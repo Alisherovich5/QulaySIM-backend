@@ -1,6 +1,6 @@
 """All ORM models. Importing this package registers every mapper."""
 
-from app.db.models.catalog import Country, Plan, Region, SupplierOffer
+from app.db.models.catalog import Country, Plan, PricingRule, Region, SupplierOffer
 from app.db.models.content import (
     FAQ,
     Banner,
@@ -52,6 +52,7 @@ __all__ = [
     "PaymentStatus",
     "Plan",
     "PlanScope",
+    "PricingRule",
     "PromoBanner",
     "PromoCode",
     "Provider",

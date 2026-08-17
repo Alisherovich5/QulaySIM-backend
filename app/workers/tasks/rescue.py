@@ -27,10 +27,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app.core.logging import get_logger
-from app.db.models import ESIM, Order
+from app.db.models import ESIM, Order, OrderItem
 from app.db.models.enums import OrderStatus
 from app.workers.celery_app import celery_app
 from app.workers.session import worker_session
@@ -57,11 +57,31 @@ def rescue_unfulfilled_orders() -> dict[str, int]:
 
     now = datetime.now(UTC)
     with worker_session() as session:
+        # Two shapes of unfinished work, because a top-up creates no eSIM row: an
+        # ordinary order is undelivered when it has no eSIM, and a top-up is
+        # undelivered when its line has no applied-at stamp. Without the second
+        # clause every top-up ever sold would look unfulfilled forever and the
+        # alert would cry wolf until nobody read it.
+        no_esim = ~select(ESIM.id).where(ESIM.order_id == Order.id).exists()
+        pending_topup = (
+            select(OrderItem.id)
+            .where(
+                OrderItem.order_id == Order.id,
+                OrderItem.esim_id.is_not(None),
+                OrderItem.topup_applied_at.is_(None),
+            )
+            .exists()
+        )
+        has_topup_line = (
+            select(OrderItem.id)
+            .where(OrderItem.order_id == Order.id, OrderItem.esim_id.is_not(None))
+            .exists()
+        )
         stale = session.execute(
             select(Order.id, Order.paid_at, Order.created_at)
             .where(
                 Order.status == OrderStatus.PAID,
-                ~select(ESIM.id).where(ESIM.order_id == Order.id).exists(),
+                or_(pending_topup, and_(no_esim, ~has_topup_line)),
             )
             .order_by(Order.id)
             .limit(MAX_PER_RUN + 1)

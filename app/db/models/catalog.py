@@ -142,3 +142,29 @@ class SupplierOffer(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     plan: Mapped[Plan] = relationship(back_populates="offers")
+
+
+class PricingRule(Base):
+    """The markup ladder, mirrored from Django because top-ups are priced here.
+
+    A top-up's cost only exists at the moment a customer asks for one — the
+    wholesaler quotes it per eSIM — so it cannot be priced by the nightly sync
+    like everything else in the catalogue. Pricing it in the API means reading the
+    same rules the admin manages, rather than hardcoding a second markup that
+    would drift from the first.
+    """
+
+    __tablename__ = "catalog_pricingrule"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    scope: Mapped[str] = mapped_column(String(10), default="global")
+    provider: Mapped[str] = mapped_column(String(20), default="")
+    country_id: Mapped[int | None] = mapped_column(ForeignKey("catalog_country.id"))
+    markup_percent: Mapped[Decimal] = mapped_column(Numeric(6, 2))
+    tier_data_mb: Mapped[int | None] = mapped_column(Integer)
+    tier_days: Mapped[int | None] = mapped_column(Integer)
+    min_margin_usd: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    rounding: Mapped[str] = mapped_column(String(10), default="charm")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str] = mapped_column(String(200), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

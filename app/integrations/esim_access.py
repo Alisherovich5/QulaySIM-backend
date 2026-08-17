@@ -173,6 +173,20 @@ class EsimAccessClient:
             payload["amount"] = amount
         return self._post("/api/v1/open/esim/order", payload)
 
+    def topup(self, *, transaction_id: str, package_code: str, iccid: str) -> dict[str, Any]:
+        """Add data to an eSIM that already exists.
+
+        `transactionId` is ours and is what makes a retry safe: the wholesaler
+        deduplicates on it, so a task that timed out after the charge went through
+        cannot buy the same gigabytes twice. The contract was confirmed against
+        the live API — the endpoint answers 200042 with neither iccid nor
+        esimTranNo, and 310409 for an ICCID that is not ours.
+        """
+        return self._post(
+            "/api/v1/open/esim/topup",
+            {"transactionId": transaction_id, "packageCode": package_code, "iccid": iccid},
+        )
+
     def query_profiles(self, *, order_no: str) -> dict[str, Any]:
         return self._post(
             "/api/v1/open/esim/query",

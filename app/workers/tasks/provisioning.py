@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from celery import Task
 
 from app.core.logging import get_logger
-from app.db.models import Order
+from app.db.models import ESIM, Order, OrderItem
 from app.workers.celery_app import celery_app
 from app.workers.session import worker_session
 
@@ -267,6 +267,29 @@ def fulfil_paid_order(self: Task, order_id: int) -> str:
         redeemed = _redeem_promo(session, order)
         customer_id = order.customer_id
         already_ordered = bool(order.provider_order_no)
+        # A top-up adds data to a profile that already exists: there is no new
+        # eSIM to buy, no QR to deliver, and the supplier call is a different
+        # endpoint. Detected from the line's own plan rather than a flag on the
+        # order, so a mixed cart could not be half-handled.
+        topup_lines = [
+            (
+                item.id,
+                item.esim_id,
+                item.plan.provider_package_code,
+                item.plan.data_amount_mb,
+                item.plan.validity_days,
+            )
+            for item in order.items
+            if item.esim_id and item.plan is not None and item.plan.scope == "topup"
+        ]
+
+    if topup_lines:
+        _apply_topups(order_id, topup_lines)
+        from app.workers.tasks.reports import announce_sale
+
+        announce_sale.apply_async((order_id,), countdown=25)
+        logger.info("fulfil.topup_done", order_id=order_id, lines=len(topup_lines))
+        return "topup"
 
     if not already_ordered:
         placed = _place_supplier_order(order_id, attempt=self.request.retries)
@@ -317,6 +340,74 @@ def _redeem_promo(session: object, order: Order) -> bool:
         # The order is already paid, so this is reported rather than refused.
         logger.warning("fulfil.promo_over_limit", order_id=order.id)
     return redeemed
+
+
+def _apply_topups(order_id: int, lines: list[tuple[int, int, str, int, int]]) -> None:
+    """Buy the extra data and put it on the customer's profile.
+
+    Ordered before the local row is updated, and the local row is only updated
+    once the wholesaler has confirmed: the alternative is telling a customer they
+    have 5 GB more when nothing was bought, which is worse than telling them
+    nothing yet — the retry will fix a missing update, but it cannot take back a
+    promise the network already made.
+
+    `transaction_id` is the order line's own id, so a retry after a timeout is
+    deduplicated by the wholesaler instead of buying twice.
+    """
+    from app.core.config import settings
+    from app.db.base import utcnow
+    from app.integrations.esim_access import EsimAccessClient, EsimAccessError
+
+    client = EsimAccessClient()
+    if not client.is_configured or not settings.supplier_calls_enabled:
+        logger.info("topup.supplier_skipped", order_id=order_id)
+        return
+
+    for item_id, esim_id, package_code, data_mb, days in lines:
+        with worker_session() as session:
+            item = session.get(OrderItem, item_id)
+            if item is None or item.topup_applied_at is not None:
+                # Already applied on an earlier attempt. The retry is meant to be
+                # cheap here, not to buy a second package.
+                continue
+            esim = session.get(ESIM, esim_id)
+            if esim is None or not esim.iccid:
+                logger.error("topup.esim_missing", order_id=order_id, esim_id=esim_id)
+                continue
+            iccid = esim.iccid
+
+        response = client.topup(
+            transaction_id=f"topup-{item_id}", package_code=package_code, iccid=iccid
+        )
+        if not response.get("success"):
+            # Raised, not swallowed: the customer has paid, so this must reach the
+            # retry policy and then the alert rather than ending here quietly.
+            raise EsimAccessError(
+                f"top-up refused: {response.get('errorCode')} {response.get('errorMsg')}"
+            )
+
+        with worker_session() as session:
+            esim = session.get(ESIM, esim_id)
+            item = session.get(OrderItem, item_id)
+            if esim is None or item is None:
+                continue
+            esim.data_total_mb = (esim.data_total_mb or 0) + data_mb
+            # The package carries its own validity. Extending from whichever is
+            # later means a top-up bought early does not shorten the window, and
+            # one bought after expiry starts a fresh one.
+            base = esim.expires_at or utcnow()
+            esim.expires_at = max(base, utcnow()) + timedelta(days=days)
+            if esim.status == "expired":
+                esim.status = "active"
+            item.topup_applied_at = utcnow()
+            session.commit()
+            logger.info(
+                "topup.applied",
+                order_id=order_id,
+                esim_id=esim_id,
+                added_mb=data_mb,
+                total_mb=esim.data_total_mb,
+            )
 
 
 def _place_supplier_order(order_id: int, *, attempt: int) -> bool:

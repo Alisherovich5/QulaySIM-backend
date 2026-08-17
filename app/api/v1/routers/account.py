@@ -16,7 +16,7 @@ from app.schemas.account import (
 )
 from app.schemas.auth import CustomerOut, ProfileUpdateIn
 from app.schemas.base import JSONDict
-from app.schemas.commerce import ESIMOut, OrderOut
+from app.schemas.commerce import ESIMOut, OrderOut, TopUpOut
 from app.services import account as service
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -39,6 +39,34 @@ async def my_esims(session: SessionDep, customer: CurrentCustomer) -> list[ESIM]
 @router.get("/orders", response_model=list[OrderOut])
 async def my_orders(session: SessionDep, customer: CurrentCustomer) -> list[Order]:
     return await order_repo.list_orders(session, customer.id)
+
+
+@router.get("/esims/{esim_id}/topups", response_model=list[TopUpOut])
+async def esim_topups(
+    esim_id: int, session: SessionDep, customer: CurrentCustomer
+) -> list[TopUpOut]:
+    """What this eSIM can be topped up with, priced in both currencies.
+
+    Live from the wholesaler on every call, because that is the only way to get a
+    top-up price: they quote per eSIM, not per destination. Answers an empty list
+    when the supplier cannot be reached — the page then says top-ups are
+    unavailable right now, which is true, rather than failing.
+    """
+    from app.services import topup_orders, topups
+
+    esim = await topup_orders.owned_esim(session, customer, esim_id)
+    options = await topups.available(session, esim)
+    return [
+        TopUpOut(
+            package_code=option.package_code,
+            data_label=option.data_label,
+            data_mb=option.data_mb,
+            validity_days=option.validity_days,
+            price_usd=option.price_usd,
+            price_uzs=await topups.as_som(option.price_usd),
+        )
+        for option in options
+    ]
 
 
 @router.post("/esims/{esim_id}/activate", response_model=ESIMOut)
