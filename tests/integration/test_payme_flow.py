@@ -41,6 +41,21 @@ async def rpc(client: AsyncClient, method: str, params: dict, **kw) -> dict:
     return response.json()
 
 
+@pytest.fixture(autouse=True)
+def _payme_is_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run these against Payme regardless of which provider is live.
+
+    The shop sells through ATMOS today, and Payme is a complete integration kept
+    dormant behind one setting. Without this, every test in this file measured
+    ATMOS's behaviour against Payme's expectations and failed for a reason that
+    had nothing to do with Payme — eleven red tests that hid whether the dormant
+    integration still worked, which is the only question they exist to answer.
+    """
+    monkeypatch.setattr(settings, "payment_provider", "payme")
+    monkeypatch.setattr(settings, "payme_merchant_id", settings.payme_merchant_id or "ci-merchant")
+    monkeypatch.setattr(settings, "payme_test_key", settings.payme_test_key or "ci-test-key")
+
+
 @pytest.fixture
 async def paid_order(client: AsyncClient) -> dict:
     """A pending order with its som amount frozen."""
