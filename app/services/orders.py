@@ -12,11 +12,15 @@ we stored, so a drifting rate would simply fail every payment.
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import get_redis
 from app.core.config import settings
 from app.core.errors import ConflictError, DomainError, ServiceUnavailableError
 from app.core.logging import get_logger
@@ -57,11 +61,42 @@ async def _freeze_som_amount(total_usd: Decimal) -> tuple[Decimal, Decimal]:
     return amount, rate
 
 
+#: How long a checkout key is remembered. A day covers every realistic retry —
+#: a stalled tap, a reloaded tab, a phone that reconnected — without keeping
+#: cart payloads around indefinitely.
+_IDEMPOTENCY_TTL = 24 * 3600
+
+
+def _idempotency_key(customer_id: int, key: str) -> str:
+    # Scoped to the customer: two people cannot collide on a key they each chose,
+    # and one cannot fish for another's order by guessing one.
+    digest = hashlib.sha256(key.strip().encode()).hexdigest()[:32]
+    return f"qs:idem:{customer_id}:{digest}"
+
+
+async def _replay(cache_key: str) -> dict[str, object] | None:
+    """The answer a previous identical request already got, if there was one."""
+    stored = await get_redis().get(cache_key)
+    if not stored:
+        return None
+    try:
+        payload = json.loads(stored)
+    except ValueError:
+        return None
+    # Decimals went out as strings and must come back as Decimals, or the
+    # response model rejects them.
+    for field in ("total_usd", "amount_uzs", "exchange_rate"):
+        if payload.get(field) is not None:
+            payload[field] = Decimal(str(payload[field]))
+    return payload
+
+
 async def place_order(
     session: AsyncSession,
     customer: Customer,
     items: list[CartItemIn],
     promo_code: str | None,
+    idempotency_key: str | None = None,
 ) -> dict[str, object]:
     if settings.payment_provider == "disabled":
         raise ServiceUnavailableError(
@@ -77,6 +112,13 @@ async def place_order(
     ):
         logger.error("orders.atmos_unconfigured")
         raise ServiceUnavailableError("Payments are not configured. Please try again soon.")
+
+    cache_key = _idempotency_key(customer.id, idempotency_key) if idempotency_key else None
+    if cache_key:
+        replayed = await _replay(cache_key)
+        if replayed is not None:
+            logger.info("orders.idempotent_replay", customer_id=customer.id, order_id=replayed.get("order_id"))
+            return replayed
 
     # Price server-side: the cart came from the customer's browser and its
     # prices may be stale or tampered with.
@@ -135,13 +177,29 @@ async def place_order(
         amount_uzs=str(amount_uzs),
     )
 
-    return {
+    result: dict[str, object] = {
         "order_id": order.id,
         "total_usd": quote.total,
         "amount_uzs": amount_uzs,
         "exchange_rate": rate,
         "payment_url": await _payment_url(order.id, amount_uzs, quote),
     }
+
+    if cache_key:
+        # Stored after the payment link exists, so a replay hands back the same
+        # link rather than a second invoice for the same cart. A cache write that
+        # fails must not fail a paid-for order — the worst case is the customer
+        # getting two links, which is what happened before this existed.
+        try:
+            await get_redis().set(
+                cache_key,
+                json.dumps({k: (str(v) if isinstance(v, Decimal) else v) for k, v in result.items()}),
+                ex=_IDEMPOTENCY_TTL,
+            )
+        except Exception:  # noqa: BLE001 — see comment above
+            logger.warning("orders.idempotency_store_failed", order_id=order.id)
+
+    return result
 
 
 async def _payment_url(order_id: int, amount_uzs: Decimal, quote: Quote) -> str:

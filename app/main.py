@@ -19,6 +19,7 @@ from app.api.v1.routers import (
     health,
     og,
     payme,
+    rum,
     support,
     webhooks,
 )
@@ -88,6 +89,7 @@ def create_app() -> FastAPI:
         checkout.router,
         account.router,
         payme.router,
+        rum.router,
         support.router,
         webhooks.router,
     ):

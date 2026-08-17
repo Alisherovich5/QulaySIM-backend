@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     rate_limit_login: str = "30/300"
     rate_limit_register: str = "20/3600"
     rate_limit_support: str = "3/300"
+    # Ten attempts a minute: generous for someone typing a code they were
+    # given, useless for walking a keyspace.
+    rate_limit_promo: str = "10/60"
+    # A page reports at most a handful of metrics; 60 a minute leaves room for a
+    # customer opening several tabs without becoming an amplifier.
+    rate_limit_rum: str = "60/60"
     rate_limit_default: str = "120/60"
 
     # --- Cache TTLs --------------------------------------------------------

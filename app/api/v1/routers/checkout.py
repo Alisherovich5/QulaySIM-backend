@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Header, Request, status
 
 from app.api.deps import CurrentCustomer, OptionalCustomer, SessionDep
+from app.core.config import settings
+from app.core.ratelimit import client_ip, enforce
 from app.schemas.commerce import (
     OrderPlacedOut,
     QuoteIn,
@@ -17,8 +19,16 @@ router = APIRouter(prefix="/api/checkout", tags=["checkout"])
 
 @router.post("/quote", response_model=QuoteOut)
 async def quote(
-    payload: QuoteIn, session: SessionDep, customer: OptionalCustomer
+    payload: QuoteIn, request: Request, session: SessionDep, customer: OptionalCustomer
 ) -> QuoteOut:
+    # A quote is the only endpoint that will tell you whether a promo code
+    # exists, which makes it the endpoint someone points a script at to find
+    # one. Limited per address and per signed-in customer, so sharing an office
+    # NAT does not lock a real buyer out of their own account.
+    if payload.promo_code:
+        await enforce("promo_ip", client_ip(request), settings.rate_limit_promo)
+        if customer:
+            await enforce("promo_user", str(customer.id), settings.rate_limit_promo)
     result = await service.price_cart(
         session,
         payload.items,
@@ -50,14 +60,28 @@ async def quote(
 
 @router.post("", response_model=OrderPlacedOut, status_code=status.HTTP_201_CREATED)
 async def place_order(
-    payload: QuoteIn, session: SessionDep, customer: CurrentCustomer
+    payload: QuoteIn,
+    session: SessionDep,
+    customer: CurrentCustomer,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> OrderPlacedOut:
     """Create a pending order and return the link that pays for it.
 
-    The order carries no eSIM until Payme confirms the charge, so abandoning
-    this step costs nothing.
+    The order carries no eSIM until the provider confirms the charge, so
+    abandoning this step costs nothing.
+
+    `Idempotency-Key` is honoured when the client sends one: a double tap on a
+    slow connection — and this shop is served over a route that loses packets in
+    bursts — otherwise opens two orders and two payment links for one cart, and
+    the customer can pay both.
     """
-    placed = await order_service.place_order(session, customer, payload.items, payload.promo_code)
+    placed = await order_service.place_order(
+        session,
+        customer,
+        payload.items,
+        payload.promo_code,
+        idempotency_key=idempotency_key,
+    )
     return OrderPlacedOut.model_validate(placed)
 
 
