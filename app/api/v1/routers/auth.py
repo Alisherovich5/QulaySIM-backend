@@ -158,9 +158,8 @@ async def providers() -> ProvidersOut:
     Google on is an environment change on the server, not a rebuild — and so a
     deployment without it shows no button instead of a broken one.
     """
-    from app.integrations import google_auth
-
     from app.domain.passwords import MIN_LENGTH
+    from app.integrations import google_auth
 
     return ProvidersOut(
         google_client_id=settings.google_client_id if google_auth.is_configured() else "",

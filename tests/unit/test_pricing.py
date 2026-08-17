@@ -153,9 +153,7 @@ class TestMinimumOrder:
     def test_a_cart_below_the_minimum_is_refused(self):
         from decimal import Decimal
 
-        from app.domain.pricing import validate_promo
-
-        from app.domain.pricing import PROMO_MIN_ORDER, promo_message_for
+        from app.domain.pricing import PROMO_MIN_ORDER, promo_message_for, validate_promo
 
         rule = self._rule()
         reason = validate_promo(rule, subtotal=Decimal("1.99"))

@@ -9,7 +9,6 @@ from sqlalchemy.orm import selectinload
 from app.db.models import ESIM, Country, Order, OrderItem, Plan, PromoCode
 from app.repositories.catalog import localised_country_name
 
-
 #: Statuses a customer's purchase history should contain. `pending` is a
 #: checkout that was opened and never paid, and `cancelled` is the same thing
 #: after the customer said so — neither is a purchase, and listing them as

@@ -43,6 +43,8 @@ def slow_noop(self, seconds: int = 20, label: str = "drill") -> dict[str, object
     for elapsed in range(seconds):
         time.sleep(1)
         if elapsed and elapsed % 5 == 0:
-            logger.warning("diagnostics.alive", label=label, task_id=self.request.id, elapsed=elapsed)
+            logger.warning(
+                "diagnostics.alive", label=label, task_id=self.request.id, elapsed=elapsed
+            )
     logger.warning("diagnostics.finished", label=label, task_id=self.request.id, attempt=attempt)
     return {"label": label, "task_id": self.request.id, "attempt": attempt, "seconds": seconds}

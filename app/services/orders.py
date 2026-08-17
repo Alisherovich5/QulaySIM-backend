@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
@@ -117,7 +116,11 @@ async def place_order(
     if cache_key:
         replayed = await _replay(cache_key)
         if replayed is not None:
-            logger.info("orders.idempotent_replay", customer_id=customer.id, order_id=replayed.get("order_id"))
+            logger.info(
+                "orders.idempotent_replay",
+                customer_id=customer.id,
+                order_id=replayed.get("order_id"),
+            )
             return replayed
 
     # Price server-side: the cart came from the customer's browser and its
@@ -193,7 +196,9 @@ async def place_order(
         try:
             await get_redis().set(
                 cache_key,
-                json.dumps({k: (str(v) if isinstance(v, Decimal) else v) for k, v in result.items()}),
+                json.dumps(
+                    {k: (str(v) if isinstance(v, Decimal) else v) for k, v in result.items()}
+                ),
                 ex=_IDEMPOTENCY_TTL,
             )
         except Exception:  # noqa: BLE001 — see comment above

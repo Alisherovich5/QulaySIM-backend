@@ -437,7 +437,9 @@ def format_report(report: Report) -> str:
                 if purchase.expires_at
                 else "faollashtirilmagan"
             )
-            price = f" · <b>{_som(purchase.paid_uzs)} so'm</b>" if purchase.paid_uzs is not None else ""
+            price = (
+                f" · <b>{_som(purchase.paid_uzs)} so'm</b>" if purchase.paid_uzs is not None else ""
+            )
             size = _data(purchase.data_mb)
             days = f" / {purchase.days} kun" if purchase.days else ""
             lines.append(
@@ -453,7 +455,8 @@ def format_report(report: Report) -> str:
         for item in report.expired[:MAX_LISTED]:
             ended = item.expires_at.strftime("%d.%m %H:%M") if item.expires_at else "—"
             lines.append(
-                f"{ended} · <b>{_escape(item.country)}</b> · {_data(item.data_mb)} · {item.provider}"
+                f"{ended} · <b>{_escape(item.country)}</b> · "
+                f"{_data(item.data_mb)} · {item.provider}"
             )
         if len(report.expired) > MAX_LISTED:
             lines.append(f"<i>…va yana {len(report.expired) - MAX_LISTED} ta</i>")
@@ -468,7 +471,9 @@ def format_report(report: Report) -> str:
     problems = []
     if report.unfulfilled_orders:
         ids = ", ".join(f"#{order_id}" for order_id in report.unfulfilled_orders[:10])
-        problems.append(f"❗ To'landi, eSIM berilmadi: <b>{len(report.unfulfilled_orders)}</b> ({ids})")
+        problems.append(
+            f"❗ To'landi, eSIM berilmadi: <b>{len(report.unfulfilled_orders)}</b> ({ids})"
+        )
     if report.stuck_esims:
         problems.append(f"❗ eSIM berildi, lekin o'rnatib bo'lmaydi: <b>{report.stuck_esims}</b>")
     if report.underwater_plans:
@@ -529,9 +534,10 @@ def build_sale_note(session: Session, order_id: int) -> str | None:
     revenue = sum((row[3] or ZERO) * row[2] for row in rows) or ZERO
     cost = sum((row[4] or ZERO) * row[2] for row in rows) or ZERO
 
+    when = order.paid_at.strftime("%d.%m.%Y %H:%M") if order.paid_at else ""
     lines = [
         "<b>🎉 Yangi sotuv</b>",
-        f"Buyurtma <b>#{order_id}</b> · {order.paid_at.strftime('%d.%m.%Y %H:%M') if order.paid_at else ''}",
+        f"Buyurtma <b>#{order_id}</b> · {when}",
         "",
     ]
     for row in rows:

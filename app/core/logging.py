@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 from collections.abc import MutableMapping
 from contextvars import ContextVar
 from typing import Any
-
-import re
 
 import structlog
 

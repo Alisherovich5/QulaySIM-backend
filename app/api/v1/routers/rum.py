@@ -185,5 +185,7 @@ async def client_error(report: ClientError) -> Response:
         pipe.expire(key, _TTL)
         await pipe.execute()
     except Exception:  # noqa: BLE001
-        pass
+        # The error is already logged above; the counter is a convenience. A
+        # second log line here would only report that the convenience failed.
+        logger.debug("client_error.count_failed")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

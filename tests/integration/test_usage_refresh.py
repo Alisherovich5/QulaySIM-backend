@@ -12,7 +12,7 @@ matching the client fails here rather than at 20 past the hour in production.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest

@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.db.base import utcnow
-from app.db.models import AtmosTransaction, ESIM, Order, Payment
+from app.db.models import ESIM, AtmosTransaction, Order, Payment
 from app.db.models.enums import OrderStatus
 
 logger = get_logger(__name__)

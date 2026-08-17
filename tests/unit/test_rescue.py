@@ -55,7 +55,9 @@ def captured(monkeypatch):
     import app.workers.tasks.provisioning as provisioning
 
     monkeypatch.setattr(provisioning, "fulfil_paid_order", _Task)
-    monkeypatch.setattr(rescue, "_alert", lambda ids, overflow: state["alerts"].append((ids, overflow)))
+    monkeypatch.setattr(
+        rescue, "_alert", lambda ids, overflow: state["alerts"].append((ids, overflow))
+    )
     return state
 
 
@@ -77,7 +79,9 @@ class TestWhatItRescues:
         assert result["redispatched"] == 0
         assert captured["dispatched"] == []
 
-    def test_an_order_stuck_past_five_minutes_is_dispatched_again(self, monkeypatch, captured) -> None:
+    def test_an_order_stuck_past_five_minutes_is_dispatched_again(
+        self, monkeypatch, captured
+    ) -> None:
         result = _run(monkeypatch, _rows(timedelta(minutes=6)))
         assert result["redispatched"] == 1
         assert captured["dispatched"] == [1]

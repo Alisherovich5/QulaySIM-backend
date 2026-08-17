@@ -71,7 +71,7 @@ class _Client:
         self.sent: list[str] = []
         self.failing = failing or set()
 
-    async def post(self, url, json, timeout):  # noqa: ANN001 - mirrors httpx
+    async def post(self, url, json, timeout):  # noqa: ASYNC109 - mirrors httpx's own signature
         chat = str(json["chat_id"])
         self.sent.append(chat)
         return _Response(chat not in self.failing)

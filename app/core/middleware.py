@@ -81,8 +81,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
-
-
 # --- Caching -----------------------------------------------------------------
 #
 # The catalogue is the same for everybody and changes a few times a day, yet
@@ -111,7 +109,9 @@ _PUBLIC_PREFIXES = (
 
 
 def _is_public(path: str) -> bool:
-    return any(path == p or path.startswith(p + "/") or path.startswith(p + "?") for p in _PUBLIC_PREFIXES)
+    return any(
+        path == p or path.startswith(p + "/") or path.startswith(p + "?") for p in _PUBLIC_PREFIXES
+    )
 
 
 class CacheHeadersMiddleware(BaseHTTPMiddleware):

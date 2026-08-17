@@ -32,8 +32,8 @@ from sqlalchemy import select
 from app.core.logging import get_logger
 from app.db.models import ESIM, Order
 from app.db.models.enums import OrderStatus
-from app.workers.session import worker_session
 from app.workers.celery_app import celery_app
+from app.workers.session import worker_session
 
 logger = get_logger("rescue")
 
@@ -126,7 +126,7 @@ def _alert(order_ids: list[int], overflow: int) -> None:
 
     try:
         asyncio.run(send_html("\n".join(lines)))
-    except Exception:  # noqa: BLE001
+    except Exception:
         # An alert that fails must not fail the rescue: the re-dispatch above is
         # the part that actually helps the customer.
         logger.exception("rescue.alert_failed")

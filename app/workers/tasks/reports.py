@@ -46,7 +46,7 @@ def send_period_report(self, days: int) -> str:
     text = format_report(report)
     try:
         asyncio.run(send_html(text))
-    except Exception as exc:  # noqa: BLE001 - retried, and logged with its window
+    except Exception as exc:
         logger.warning("reports.delivery_failed", days=days, error=str(exc))
         raise self.retry(exc=exc) from exc
 
@@ -78,7 +78,9 @@ def _claim_announcement(order_id: int) -> bool:
     """
     try:
         client = redis.from_url(str(settings.redis_url))
-        return bool(client.set(f"qs:announced:order:{order_id}", "1", nx=True, ex=ANNOUNCED_TTL_SECONDS))
+        return bool(
+            client.set(f"qs:announced:order:{order_id}", "1", nx=True, ex=ANNOUNCED_TTL_SECONDS)
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("reports.announce_claim_failed", order_id=order_id, error=str(exc))
         return True
@@ -106,7 +108,7 @@ def announce_sale(self, order_id: int) -> str:
 
     try:
         asyncio.run(send_html(note))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("reports.announce_failed", order_id=order_id, error=str(exc))
         raise self.retry(exc=exc) from exc
 

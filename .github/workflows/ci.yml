@@ -58,7 +58,20 @@ jobs:
 
       # Django owns the schema — apply its migrations, then assert the
       # SQLAlchemy models still match. This is the contract between the repos.
-      - name: Check out admin (schema owner)
+      # The same branch when the admin repo has one, its default otherwise.
+      # Taking main unconditionally meant CI applied migrations that predate the
+      # schema this branch is written against, and every test then failed on a
+      # missing column — a failure that says nothing about the code under test.
+      - name: Check out admin (schema owner, same branch)
+        id: admin_same_branch
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: Alisherovich5/QulaySIM-admin
+          path: admin
+          ref: ${{ github.ref_name }}
+      - name: Check out admin (schema owner, default branch)
+        if: steps.admin_same_branch.outcome == 'failure'
         uses: actions/checkout@v4
         with: {repository: Alisherovich5/QulaySIM-admin, path: admin}
       - name: Apply Django migrations

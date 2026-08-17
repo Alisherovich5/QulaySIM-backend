@@ -19,9 +19,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
+from app.core.config import settings
 from app.db.models import ESIM, Country, Customer, Order, OrderItem, Plan
 from app.db.models.enums import ESIMStatus, OrderStatus
-from app.core.config import settings
 from app.services.reporting import build_report, format_report
 
 pytestmark = pytest.mark.anyio

@@ -14,8 +14,8 @@ import pytest
 
 from app.core.cache import cache_key
 from app.core.config import settings
-from app.services import currency
 from app.integrations.cbu import RateUnavailableError
+from app.services import currency
 
 
 @pytest.fixture(autouse=True)
