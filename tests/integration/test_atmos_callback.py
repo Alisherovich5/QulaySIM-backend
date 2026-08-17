@@ -107,7 +107,39 @@ async def test_a_replayed_callback_answers_yes_without_double_recording(
         payments = (await session.execute(select(Payment))).scalars().all()
     assert len(rows) == 1
     assert len(payments) == 1
-    assert _configured == [order_id], "fulfilment must be enqueued exactly once"
+    # The payment is recorded once — that part must never double. Fulfilment is
+    # dispatched again, and deliberately so: the first dispatch may have been
+    # lost (Redis unreachable for a moment, or the task exhausting its retries),
+    # and ATMOS's retry was the only signal that anything was wrong. Answering
+    # OK without dispatching is what left orders paid and undelivered until
+    # somebody read a daily report.
+    assert _configured == [order_id, order_id]
+
+
+async def test_a_replay_does_not_reorder_once_a_supplier_has_the_order(
+    session_factory, _configured
+):
+    """The one way this safety net could cost money instead of saving it.
+
+    If a supplier order already exists, what is missing is the profile sync, not
+    the purchase — and dispatching a purchase alongside one already in flight
+    could buy the same eSIM twice. That case is left to the five-minute sweep,
+    by which time no task is running.
+    """
+    order_id = await _order(session_factory)
+    payload = _payload(order_id, "5000000")
+    async with session_factory() as session:
+        await service.handle_callback(session, payload)
+    _configured.clear()
+
+    async with session_factory() as session:
+        order = await session.get(Order, order_id)
+        order.provider_order_no = "SUPPLIER-123"
+        await session.commit()
+
+    async with session_factory() as session:
+        assert (await service.handle_callback(session, payload))["status"] == 1
+    assert _configured == []
 
 
 async def test_a_wrong_amount_is_refused_and_recorded(session_factory, _configured):

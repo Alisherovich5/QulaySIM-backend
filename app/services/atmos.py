@@ -60,6 +60,14 @@ async def _ensure_fulfilment(session: AsyncSession, order_id: int) -> None:
     ).first()
     if has_esim:
         return
+    # Only when nothing has been ordered from a supplier yet. If a supplier order
+    # exists but no profile has arrived, what is missing is the *sync*, not the
+    # purchase — and dispatching a purchase alongside one already in flight is
+    # the single way this safety net could cost money rather than save it. The
+    # five-minute sweep picks that case up, by which time no task is running.
+    order = await session.get(Order, order_id)
+    if order is None or order.provider_order_no:
+        return
     logger.info("atmos.refulfil", order_id=order_id)
     fulfil_paid_order.delay(order_id)
 
