@@ -11,6 +11,7 @@ import hashlib
 from fastapi import Request
 
 from app.core.cache import get_redis
+from app.core.config import settings
 from app.core.errors import RateLimitedError
 from app.core.logging import get_logger
 
@@ -31,29 +32,36 @@ def parse_rule(rule: str) -> tuple[int, int]:
     return int(limit), int(window)
 
 
-# One hop in front of the app: nginx in the storefront image, which proxies to
-# us with `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`. If Caddy
-# or another proxy is ever inserted between them, raise this to match, or every
-# limit below starts keying on an address the caller picked.
-_TRUSTED_PROXY_HOPS = 1
-
-
+# Where the visitor's address is written, and why it is not simply read off the
+# socket.
+#
+# The chain is visitor → Caddy → this app, and Cloudflare adds one more link in
+# front. Each proxy appends its own peer to X-Forwarded-For, so the header grows
+# from the right and the entries our own proxies wrote are the last ones. The
+# left-most entry is whatever the caller typed, which is why it is never used:
+# reading from the left let anyone rotate a header and mint unlimited fresh
+# buckets, which is the whole limit gone.
+#
+# The hop count therefore has to match reality, and it changed the day Cloudflare
+# went in front — off by one, every visitor in the country shares one bucket and
+# starts seeing 429s that have nothing to do with them.
 def client_ip(request: Request) -> str:
-    """The address the rate limits are counted against.
+    """The address the rate limits are counted against."""
+    # Cloudflare states the true client in its own header and does not let a
+    # caller override it — but only when the request genuinely came through
+    # Cloudflare, which is exactly what the origin lockdown guarantees. Until
+    # that is in place the setting stays false and this branch is dead.
+    if settings.trust_cloudflare_client_ip:
+        candidate = request.headers.get("cf-connecting-ip", "").strip()
+        if _is_ip(candidate):
+            return candidate
 
-    Read from the RIGHT of X-Forwarded-For, not the left. nginx *appends* the
-    real peer to whatever the caller sent, so the left-most entry is whatever
-    the caller typed — taking it let anyone rotate a header and get an unlimited
-    number of fresh buckets, which is the whole limit gone. The right-most
-    entries are the ones our own proxies wrote, and only those can be trusted.
-    """
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
         hops = [part.strip() for part in forwarded.split(",") if part.strip()]
         if hops:
-            # The last hop is the peer nginx saw. With more proxies in front,
-            # step back one per trusted hop.
-            index = max(0, len(hops) - _TRUSTED_PROXY_HOPS)
+            # One step back per proxy of ours, counting from the right.
+            index = max(0, len(hops) - max(1, settings.trusted_proxy_hops))
             candidate = hops[index] if index < len(hops) else hops[-1]
             # Never let a caller's text become a Redis key or a log field.
             if _is_ip(candidate):

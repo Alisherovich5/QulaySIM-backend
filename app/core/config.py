@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     # further change, and this is what tells it a price moved.
     cloudflare_zone_id: str = ""
     cloudflare_api_token: str = ""
+    #: Believe `CF-Connecting-IP`. Only true once the origin refuses everything
+    #: except Cloudflare's own addresses — until then anybody can send that
+    #: header directly and choose which bucket their requests are counted in.
+    trust_cloudflare_client_ip: bool = False
+    #: How many proxies of our own sit in front of the app, each appending one
+    #: entry to X-Forwarded-For. Caddy alone is 1; Cloudflare in front of Caddy
+    #: is 2. Wrong by one and every visitor shares a single rate-limit bucket.
+    trusted_proxy_hops: int = 1
     rate_limit_default: str = "120/60"
 
     # --- Cache TTLs --------------------------------------------------------
