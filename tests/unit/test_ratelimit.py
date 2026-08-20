@@ -110,7 +110,11 @@ def test_cf_connecting_ip_is_believed_once_it_can_be(monkeypatch: pytest.MonkeyP
     from app.core import ratelimit
 
     monkeypatch.setattr(ratelimit.settings, "trust_cloudflare_client_ip", True)
-    assert ratelimit.client_ip(_CfRequest(forwarded="1.2.3.4", cf="203.0.113.9")) == "203.0.113.9"
+    # The peer has to be Cloudflare for its header to count — see
+    # TestCloudflareIsOnlyBelievedWhenItSpoke. 172.64.198.64 is one of their
+    # edges, taken from this deployment's own logs.
+    request = _CfRequest(forwarded="172.64.198.64", cf="203.0.113.9")
+    assert ratelimit.client_ip(request) == "203.0.113.9"
 
 
 def test_a_junk_cf_header_falls_back_rather_than_becoming_a_key(
@@ -122,3 +126,63 @@ def test_a_junk_cf_header_falls_back_rather_than_becoming_a_key(
     monkeypatch.setattr(ratelimit.settings, "trusted_proxy_hops", 1)
     request = _CfRequest(forwarded="203.0.113.9", cf="'; DROP TABLE orders; --")
     assert ratelimit.client_ip(request) == "203.0.113.9"
+
+
+class TestCloudflareIsOnlyBelievedWhenItSpoke:
+    """The header is trusted, the sender is verified.
+
+    `CF-Connecting-IP` is the only reliable statement of the real client once
+    Cloudflare is in front — and it is exactly as forgeable as the connection it
+    arrived on. Anyone who reaches the origin directly can claim to be any
+    address, which would hand them the ATMOS callback's source-range check,
+    somebody else's rate-limit bucket and the admin's lockout counter. So the
+    peer that delivered the request has to be Cloudflare.
+    """
+
+    def test_believed_when_the_peer_is_a_cloudflare_edge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import ratelimit
+
+        monkeypatch.setattr(ratelimit.settings, "trust_cloudflare_client_ip", True)
+        # 162.158.172.93 is the edge that delivered the refused payment callback.
+        request = _CfRequest(forwarded="162.158.172.93", cf="203.0.113.9")
+        assert ratelimit.client_ip(request) == "203.0.113.9"
+
+    def test_ignored_when_the_request_did_not_come_through_cloudflare(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import ratelimit
+
+        monkeypatch.setattr(ratelimit.settings, "trust_cloudflare_client_ip", True)
+        monkeypatch.setattr(ratelimit.settings, "trusted_proxy_hops", 1)
+        # A direct caller inventing a header for themselves.
+        request = _CfRequest(forwarded="185.213.229.124", cf="8.8.8.8")
+        assert ratelimit.client_ip(request) == "185.213.229.124"
+
+    def test_a_bare_connection_claiming_cloudflare_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from app.core import ratelimit
+
+        monkeypatch.setattr(ratelimit.settings, "trust_cloudflare_client_ip", True)
+        request = _CfRequest(cf="8.8.8.8", peer="203.0.113.50")
+        assert ratelimit.client_ip(request) == "203.0.113.50"
+
+
+def test_cloudflare_ranges_are_current() -> None:
+    """A reminder, not a network call.
+
+    The bundled list is Cloudflare's published ranges as of 2026-08-20. They
+    change a handful of times a decade, and when they do, requests from a new
+    range stop being recognised as Cloudflare — which quietly turns the
+    verification above into "never trust the header". Refresh from
+    https://api.cloudflare.com/client/v4/ips if this ever looks thin.
+    """
+    from app.core.cloudflare_ips import CLOUDFLARE_IPV4, CLOUDFLARE_IPV6, is_cloudflare
+
+    assert len(CLOUDFLARE_IPV4) >= 15
+    assert len(CLOUDFLARE_IPV6) >= 7
+    assert is_cloudflare("172.64.198.64")
+    assert not is_cloudflare("8.8.8.8")
+    assert not is_cloudflare("not-an-ip")

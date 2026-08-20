@@ -11,6 +11,7 @@ import hashlib
 from fastapi import Request
 
 from app.core.cache import get_redis
+from app.core.cloudflare_ips import is_cloudflare
 from app.core.config import settings
 from app.core.errors import RateLimitedError
 from app.core.logging import get_logger
@@ -45,13 +46,29 @@ def parse_rule(rule: str) -> tuple[int, int]:
 # The hop count therefore has to match reality, and it changed the day Cloudflare
 # went in front — off by one, every visitor in the country shares one bucket and
 # starts seeing 429s that have nothing to do with them.
+def _peer(request: Request) -> str:
+    """The address our own proxy heard from — the last hop before us.
+
+    Caddy replaces X-Forwarded-For with the address it received the connection
+    from rather than appending to it, measured on this deployment. So the
+    right-most entry is the peer, and with Cloudflare in front that peer is a
+    Cloudflare edge.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    hops = [part.strip() for part in forwarded.split(",") if part.strip()]
+    if hops:
+        return hops[-1]
+    return request.client.host if request.client else ""
+
+
 def client_ip(request: Request) -> str:
     """The address the rate limits are counted against."""
     # Cloudflare states the true client in its own header and does not let a
-    # caller override it — but only when the request genuinely came through
-    # Cloudflare, which is exactly what the origin lockdown guarantees. Until
-    # that is in place the setting stays false and this branch is dead.
-    if settings.trust_cloudflare_client_ip:
+    # caller override it. Believed only when the request actually arrived
+    # through Cloudflare: anyone who reaches the origin directly can send that
+    # header themselves, and being believed would hand them the payment
+    # callback's source-range check and somebody else's rate-limit bucket.
+    if settings.trust_cloudflare_client_ip and is_cloudflare(_peer(request)):
         candidate = request.headers.get("cf-connecting-ip", "").strip()
         if _is_ip(candidate):
             return candidate
