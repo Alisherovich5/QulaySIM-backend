@@ -221,6 +221,15 @@ def grant_referral_reward(customer_id: int) -> str | None:
                 max_uses=1,
                 used_count=0,
                 is_active=True,
+                # Bound to the person who earned it, exactly as the loyalty
+                # cashback is. Without this the reward is a bearer token: the
+                # repository hands it to whoever types the string, so a code
+                # pasted into a group chat discounts a stranger's order and the
+                # referrer never gets what the page promised them.
+                issued_to_id=referral.referrer_id,
+                # Says which scheme paid for it, so the admin can tell a
+                # referral reward from a discount somebody typed by hand.
+                reason="referral",
             )
         )
         referral.status = "completed"
