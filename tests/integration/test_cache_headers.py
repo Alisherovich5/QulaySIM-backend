@@ -30,7 +30,9 @@ async def client() -> AsyncClient:
 
 class TestCatalogueIsCacheable:
     async def test_it_is_public_with_a_revalidation_window(self, client: AsyncClient) -> None:
-        response = await client.get("/api/regions")
+        # With the language in the address, which is what makes it cacheable at
+        # all — see TestTheLanguageDecidesCacheability below.
+        response = await client.get("/api/regions?lang=uz")
         assert response.status_code == 200
         cache = response.headers["cache-control"]
         assert "public" in cache
@@ -38,7 +40,9 @@ class TestCatalogueIsCacheable:
         # serves what it has and refreshes behind the visitor's back.
         assert "stale-while-revalidate" in cache
 
-    async def test_it_varies_by_language(self, client: AsyncClient) -> None:
+    async def test_it_varies_by_language_when_the_address_does_not_say(
+        self, client: AsyncClient
+    ) -> None:
         """Otherwise a shared cache serves Uzbek prices to a Russian visitor.
 
         And it would do it at the edge, where we could not see it happening.
@@ -47,15 +51,17 @@ class TestCatalogueIsCacheable:
         assert "Accept-Language" in response.headers.get("vary", "")
 
     async def test_the_same_content_answers_304_with_no_body(self, client: AsyncClient) -> None:
-        first = await client.get("/api/regions")
+        first = await client.get("/api/regions?lang=uz")
         etag = first.headers["etag"]
 
-        again = await client.get("/api/regions", headers={"If-None-Match": etag})
+        again = await client.get("/api/regions?lang=uz", headers={"If-None-Match": etag})
         assert again.status_code == 304
         assert again.content == b""
 
     async def test_a_stale_etag_gets_the_full_answer(self, client: AsyncClient) -> None:
-        response = await client.get("/api/regions", headers={"If-None-Match": 'W/"nonsense"'})
+        response = await client.get(
+            "/api/regions?lang=uz", headers={"If-None-Match": 'W/"nonsense"'}
+        )
         assert response.status_code == 200
         assert response.content
 
@@ -93,3 +99,39 @@ class TestPrivateAnswersAreNeverCached:
         """
         response = await client.get("/api/definitely-not-a-route")
         assert response.headers["cache-control"] == "private, no-store"
+
+
+class TestTheLanguageDecidesCacheability:
+    """A catalogue answer may be stored only when its address says which
+    language it is.
+
+    Cloudflare refuses to cache any response that varies on anything but
+    Accept-Encoding, so `Vary: Accept-Language` quietly meant "never cache the
+    catalogue": measured on the live site as cf-cache-status DYNAMIC on every
+    request, each one crossing a continent for a body the edge already had. The
+    language moved into the query — which is what the API's own language
+    dependency reads first — and `Vary` came out with it.
+
+    The other direction matters just as much. An address with no language in it
+    is ambiguous, so it is marked no-store: better uncached than stored under a
+    name that does not say what is inside.
+    """
+
+    async def test_an_explicit_language_is_cacheable_and_does_not_vary(
+        self, client: AsyncClient
+    ) -> None:
+        response = await client.get("/api/regions?lang=uz")
+        assert response.headers["vary"] == "Accept-Encoding"
+        assert "s-maxage" in response.headers["cache-control"]
+
+    async def test_an_ambiguous_address_is_never_stored(self, client: AsyncClient) -> None:
+        response = await client.get("/api/regions")
+        assert response.headers["cache-control"] == "private, no-store"
+        assert "Accept-Language" in response.headers["vary"]
+
+    async def test_two_languages_are_two_bodies_under_two_addresses(
+        self, client: AsyncClient
+    ) -> None:
+        uz = await client.get("/api/regions?lang=uz")
+        ru = await client.get("/api/regions?lang=ru")
+        assert uz.headers["etag"] != ru.headers["etag"]

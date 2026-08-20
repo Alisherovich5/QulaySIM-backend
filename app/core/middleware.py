@@ -161,7 +161,25 @@ class CacheHeadersMiddleware(BaseHTTPMiddleware):
         # Catalogue answers are translated, so a cache that ignored the language
         # would serve Uzbek prices to a Russian visitor — and it would do it
         # from the edge, where we could not see it happening.
-        headers["Vary"] = "Accept-Language, Accept-Encoding"
+        #
+        # Which is why the address decides, not the header. `?lang=` is what the
+        # language dependency reads first anyway, and with it present the three
+        # translations are three URLs — something every cache in the chain
+        # already understands. `Vary` is then redundant, and it is worse than
+        # redundant: Cloudflare refuses to cache any response that varies on
+        # anything but Accept-Encoding, so leaving it in meant every catalogue
+        # request travelled to Lithuania. Measured before this: cf-cache-status
+        # DYNAMIC on every hit, 0.6–1.5 s to first byte.
+        #
+        # Without the parameter the answer stays uncacheable, deliberately: an
+        # address that does not say which language it is has no business being
+        # stored under that name.
+        explicit_language = "lang" in request.query_params
+        headers["Vary"] = (
+            "Accept-Encoding" if explicit_language else "Accept-Language, Accept-Encoding"
+        )
+        if not explicit_language:
+            headers["Cache-Control"] = "private, no-store"
         etag = 'W/"' + hashlib.sha256(body).hexdigest()[:32] + '"'
         headers["ETag"] = etag
 
