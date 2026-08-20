@@ -150,3 +150,36 @@ class TestInvoiceItems:
         ]
         # The payload must be JSON-serialisable as-is.
         json.dumps(items)
+
+
+class TestARefusalIsAnnounced:
+    """Every refusal reaches a human within seconds.
+
+    Written the day a customer paid 79 999 so‘m and got nothing: the callback
+    was refused because the caller's address had become Cloudflare's, and the
+    entire trace was one warning line. We learned about it from the customer.
+    A refusal is rare and always means somebody may have been charged, so the
+    silent path is the bug.
+    """
+
+    async def test_a_bad_ip_raises_the_alarm(self, monkeypatch) -> None:
+        sent: list[str] = []
+
+        async def fake_send(text: str, **_kwargs) -> None:
+            sent.append(text)
+
+        monkeypatch.setattr("app.integrations.telegram.send_html", fake_send)
+        await service.alarm_bad_ip("162.158.172.93")
+        assert len(sent) == 1
+        assert "162.158.172.93" in sent[0]
+        assert "rad etildi" in sent[0]
+
+    async def test_a_telegram_outage_never_breaks_the_answer(self, monkeypatch) -> None:
+        """ATMOS is waiting on the response. A failed alarm must not turn a
+        refusal into a timeout they will retry."""
+
+        async def broken(_text: str, **_kwargs) -> None:
+            raise RuntimeError("telegram is down")
+
+        monkeypatch.setattr("app.integrations.telegram.send_html", broken)
+        await service.alarm_bad_ip("1.2.3.4")  # must not raise

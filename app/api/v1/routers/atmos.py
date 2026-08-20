@@ -34,6 +34,10 @@ async def atmos_callback(request: Request, session: SessionDep) -> dict[str, Any
         # source-range check, and it costs the attacker information to learn
         # nothing more than "no".
         logger.warning("atmos.callback_bad_ip", ip=ip)
+        # This is the one that cost a customer their eSIM: the address changed
+        # the day Cloudflare went in front, the callback was refused, and the
+        # only trace was this line. Refusals are rare enough to always announce.
+        await service.alarm_bad_ip(ip)
         return {"status": 0, "message": "Forbidden"}
 
     try:

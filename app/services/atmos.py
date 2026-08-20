@@ -71,6 +71,34 @@ async def _ensure_fulfilment(session: AsyncSession, order_id: int) -> None:
     fulfil_paid_order.delay(order_id)
 
 
+async def _alarm(reason: str, **facts: Any) -> None:
+    """Say out loud that a payment was refused.
+
+    The reason this exists: a customer paid 79 999 so‘m, the confirmation was
+    refused because the caller’s address had changed to Cloudflare’s, and the
+    only trace was one warning line in a log nobody was reading. The money was
+    gone from the customer’s side and the order sat "pending". We found out
+    because they wrote to support.
+
+    A refusal is rare and always worth waking somebody for, so it goes to the
+    operations chat immediately. Failing to send must never fail the callback:
+    ATMOS is waiting on the answer, and a telegram outage is not a reason to
+    turn a refusal into a timeout.
+    """
+    detail = " · ".join(f"{k}: {v}" for k, v in facts.items() if v not in (None, ""))
+    try:
+        from app.integrations.telegram import send_html
+
+        await send_html(
+            "⚠️ <b>To‘lov rad etildi</b>\n"
+            f"Sabab: {reason}\n"
+            f"{detail}\n\n"
+            "Mijozdan pul yechilgan bo‘lishi mumkin — tekshirish kerak."
+        )
+    except Exception:  # noqa: BLE001 - never let the alarm break the answer
+        logger.warning("atmos.alarm_failed", reason=reason)
+
+
 def _ok(message: str = "Успешно") -> dict[str, Any]:
     return {"status": 1, "message": message}
 
@@ -98,6 +126,11 @@ def _expected_tiyin(order: Order) -> int | None:
     return int((order.amount_uzs * 100).to_integral_value())
 
 
+async def alarm_bad_ip(ip: str) -> None:
+    """A callback from an address that is not the payment provider's."""
+    await _alarm("noma‘lum manzildan keldi (IP ro‘yxatda yo‘q)", ip=ip)
+
+
 async def handle_callback(session: AsyncSession, payload: dict[str, Any]) -> dict[str, Any]:
     """Answer ATMOS's pre-debit confirmation. Always returns a status body."""
     if not settings.atmos_callback_api_key:
@@ -117,6 +150,7 @@ async def handle_callback(session: AsyncSession, payload: dict[str, Any]) -> dic
     # over "100000.0" unverifiable.
     if not hmac.compare_digest(expected_sign(store_id, transaction_id, account, amount), sign):
         logger.warning("atmos.bad_sign", transaction_id=transaction_id)
+        await _alarm("imzo to‘g‘ri kelmadi", tranzaksiya=transaction_id, buyurtma=account)
         return _refuse("Invalid signature")
 
     if store_id != str(settings.atmos_store_id):
@@ -168,6 +202,12 @@ async def handle_callback(session: AsyncSession, payload: dict[str, Any]) -> dic
         logger.warning(
             "atmos.amount_mismatch", order_id=order.id, expected=expected, received=amount
         )
+        await _alarm(
+            "summa buyurtmaga to‘g‘ri kelmadi",
+            buyurtma=order.id,
+            kutilgan=expected,
+            kelgan=amount,
+        )
         return _refuse("Amount does not match the order")
 
     if order.status != OrderStatus.PENDING:
@@ -177,6 +217,12 @@ async def handle_callback(session: AsyncSession, payload: dict[str, Any]) -> dic
             await _ensure_fulfilment(session, order.id)
             return _ok()
         await record(STATUS_REJECTED)
+        await _alarm(
+            "buyurtma to‘lovga yaroqsiz holatda",
+            buyurtma=order.id,
+            holati=str(order.status),
+            tranzaksiya=transaction_id,
+        )
         return _refuse("Order is not payable")
 
     order.status = OrderStatus.PAID
