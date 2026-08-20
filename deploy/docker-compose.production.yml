@@ -49,6 +49,13 @@ x-api-env: &api-env
   ESIMCARD_API_TOKEN: ${ESIMCARD_API_TOKEN}
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
   TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+  # How many proxies of ours sit in front of the app, each appending one entry
+  # to X-Forwarded-For. Caddy alone is 1; Cloudflare in front of Caddy is 2.
+  # Wrong by one and every visitor in the country shares one rate-limit bucket.
+  TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
+  # Believe CF-Connecting-IP. Only true once the origin refuses everything
+  # except Cloudflare's own addresses.
+  TRUST_CLOUDFLARE_CLIENT_IP: ${TRUST_CLOUDFLARE_CLIENT_IP:-false}
   # ATMOS hosted checkout. Defaults keep the API bootable when the store is
   # not configured: place_order refuses and the callback rejects everything.
   ATMOS_CONSUMER_KEY: ${ATMOS_CONSUMER_KEY:-}
