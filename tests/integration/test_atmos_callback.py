@@ -216,8 +216,9 @@ class TestOnlyARealPaymentWakesSomebody:
         monkeypatch.setattr(router.service, "caller_allowed", lambda _ip: False)
 
         class _Request:
-            headers = {"x-forwarded-for": "198.51.100.7"}
-            client = type("Peer", (), {"host": "198.51.100.7"})()
+            def __init__(self) -> None:
+                self.headers = {"x-forwarded-for": "198.51.100.7"}
+                self.client = type("Peer", (), {"host": "198.51.100.7"})()
 
             async def json(self):
                 return body
