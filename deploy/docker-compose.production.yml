@@ -91,6 +91,8 @@ x-django-env: &django-env
   FULFILLABLE_PROVIDERS: ${FULFILLABLE_PROVIDERS:-esimaccess,esimcard}
   FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY}
   LOG_LEVEL: ${LOG_LEVEL}
+  # Same switch the API reads; see docs/adr/0001-client-address-behind-cloudflare.md
+  TRUST_CLOUDFLARE_CLIENT_IP: ${TRUST_CLOUDFLARE_CLIENT_IP:-false}
 
 services:
   postgres:
