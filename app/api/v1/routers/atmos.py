@@ -28,22 +28,32 @@ async def atmos_callback(request: Request, session: SessionDep) -> dict[str, Any
     ATMOS treats anything but a clean 200 as "ask again later", so transport
     errors would only earn us retries — refusals belong in the payload.
     """
+    # Read the body before judging the caller. Nothing here acts on it — the
+    # address still decides whether the callback is processed — but it decides
+    # whether a human is woken: a refusal only matters if somebody may have been
+    # charged, and an empty probe from an internet scanner charges nobody. An
+    # alarm that fires on scanner traffic is an alarm that stops being read.
+    try:
+        payload = await request.json()
+    except ValueError:
+        payload = None
+    looks_like_a_payment = isinstance(payload, dict) and bool(
+        payload.get("transaction_id") and payload.get("account")
+    )
+
     ip = client_ip(request)
     if not service.caller_allowed(ip):
         # The signature alone would catch a forgery; the doc still demands the
         # source-range check, and it costs the attacker information to learn
         # nothing more than "no".
-        logger.warning("atmos.callback_bad_ip", ip=ip)
-        # This is the one that cost a customer their eSIM: the address changed
-        # the day Cloudflare went in front, the callback was refused, and the
-        # only trace was this line. Refusals are rare enough to always announce.
-        await service.alarm_bad_ip(ip)
+        logger.warning("atmos.callback_bad_ip", ip=ip, payment=looks_like_a_payment)
+        if looks_like_a_payment:
+            # This is the one that cost a customer their eSIM: the address
+            # changed the day Cloudflare went in front, the callback was
+            # refused, and the only trace was this line.
+            await service.alarm_bad_ip(ip)
         return {"status": 0, "message": "Forbidden"}
 
-    try:
-        payload = await request.json()
-    except ValueError:
-        return {"status": 0, "message": "Malformed callback"}
     if not isinstance(payload, dict):
         return {"status": 0, "message": "Malformed callback"}
 

@@ -188,3 +188,50 @@ async def test_an_already_paid_order_rejects_a_second_transaction(session_factor
         )
     assert answer["status"] == 0
     assert _configured == [order_id]
+
+
+class TestOnlyARealPaymentWakesSomebody:
+    """The refusal alarm must not fire on internet noise.
+
+    A refused callback means somebody may have been charged for nothing, which
+    is worth waking an operator for — that is why the alarm exists. But the
+    endpoint's address is guessable, scanners probe everything, and the first
+    person it woke was the engineer's own test request. An alarm that fires on
+    scanner traffic is an alarm that stops being read, and then the next real
+    refusal goes unseen for the same reason as the first one did.
+    """
+
+    async def _post(self, monkeypatch, session_factory, body: dict) -> list[str]:
+        from app.api.v1.routers import atmos as router
+
+        alarms: list[str] = []
+
+        async def fake_alarm(ip: str) -> None:
+            alarms.append(ip)
+
+        monkeypatch.setattr(router.service, "alarm_bad_ip", fake_alarm)
+        # An address that is not in ATMOS's published range, which is the whole
+        # premise: the callback is refused and the question is only whether a
+        # phone buzzes.
+        monkeypatch.setattr(router.service, "caller_allowed", lambda _ip: False)
+
+        class _Request:
+            headers = {"x-forwarded-for": "198.51.100.7"}
+            client = type("Peer", (), {"host": "198.51.100.7"})()
+
+            async def json(self):
+                return body
+
+        async with session_factory() as session:
+            answer = await router.atmos_callback(_Request(), session)
+        assert answer["status"] == 0, "a bad address must still be refused"
+        return alarms
+
+    async def test_an_empty_probe_is_refused_silently(self, monkeypatch, session_factory) -> None:
+        assert await self._post(monkeypatch, session_factory, {"probe": "hello"}) == []
+
+    async def test_something_that_names_a_transaction_and_an_order_raises_it(
+        self, monkeypatch, session_factory
+    ) -> None:
+        body = {"transaction_id": "tx-9", "account": "70", "amount": "7999900"}
+        assert await self._post(monkeypatch, session_factory, body) == ["198.51.100.7"]
