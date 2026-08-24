@@ -132,6 +132,45 @@ class TestTheLanguageDecidesCacheability:
     async def test_two_languages_are_two_bodies_under_two_addresses(
         self, client: AsyncClient
     ) -> None:
-        uz = await client.get("/api/regions?lang=uz")
-        ru = await client.get("/api/regions?lang=ru")
-        assert uz.headers["etag"] != ru.headers["etag"]
+        """Seeds its own translated row, rather than trusting the catalogue.
+
+        This asserted different ETags against whatever `scripts.seed` had
+        produced, and that seed writes `name_uz`/`name_ru` empty. Both languages
+        therefore rendered the SAME body, the ETags matched, and the test had
+        been red in CI since it was written -- failing on the fixture rather than
+        on the behaviour, which is the kind of red that teaches people to ignore
+        a red build.
+
+        A row whose two names genuinely differ is the premise the assertion
+        needs, so the test now creates one.
+        """
+        from sqlalchemy import delete
+
+        from app.db.models import Region
+        from app.db.session import session_scope
+
+        slug = "cache-headers-two-languages"
+        async with session_scope() as session:
+            await session.execute(delete(Region).where(Region.slug == slug))
+            session.add(
+                Region(
+                    name="Two Languages",
+                    name_uz="Ikki til",
+                    name_ru="Два языка",
+                    slug=slug,
+                    sort_order=9999,
+                )
+            )
+            await session.commit()
+
+        try:
+            uz = await client.get("/api/regions?lang=uz")
+            ru = await client.get("/api/regions?lang=ru")
+
+            assert "Ikki til" in uz.text
+            assert "Два языка" in ru.text
+            assert uz.headers["etag"] != ru.headers["etag"]
+        finally:
+            async with session_scope() as session:
+                await session.execute(delete(Region).where(Region.slug == slug))
+                await session.commit()

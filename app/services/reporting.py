@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import ESIM, Country, Customer, Order, OrderItem, Plan
@@ -59,6 +59,29 @@ class PurchaseLine:
     days: int = 0
 
 
+@dataclass
+class UsageLine:
+    """One live profile close enough to the end to be worth naming."""
+
+    country: str
+    plan: str
+    left_mb: int
+    total_mb: int
+    days_left: int
+
+
+#: How many nearly-finished profiles the report names before it summarises. The
+#: whole message shares Telegram's 4096 characters with the problems section,
+#: which is the part worth reading.
+MAX_RUNNING_OUT = 6
+
+#: What counts as running out. Either bound alone is not enough: a profile with
+#: 200 MB left has days of life if nobody travels, and one with 20 GB left is
+#: still worthless tomorrow if it expires tonight.
+RUNNING_OUT_MB_SHARE = Decimal("0.10")
+RUNNING_OUT_DAYS = 2
+
+
 #: How many individual sales a report lists before it summarises the rest.
 #: Telegram caps a message at 4096 characters and a report that gets truncated
 #: loses its problems section, which is the part worth reading.
@@ -92,6 +115,20 @@ class Report:
     underwater_plans: list[tuple[str, Decimal, Decimal]] = field(default_factory=list)
     stuck_esims: int = 0
     abandoned_checkouts: int = 0
+
+    # Current state, NOT the window. "How much data is still out there" is a
+    # question about right now: a profile sold three weeks ago is the one most
+    # likely to be running out today, and a report scoped to the last day would
+    # never mention it.
+    live_esims: int = 0
+    live_total_mb: int = 0
+    live_used_mb: int = 0
+    running_out: list[UsageLine] = field(default_factory=list)
+
+    @property
+    def live_left_mb(self) -> int:
+        """Clamped: a wholesaler's usage figure can exceed the allowance sold."""
+        return max(0, self.live_total_mb - self.live_used_mb)
 
     @property
     def margin_usd(self) -> Decimal:
@@ -350,6 +387,66 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
         )
     ).scalar_one()
 
+    # --- what is still out there ------------------------------------------
+    #
+    # Deliberately NOT scoped to the report window. Everything above answers
+    # "what happened"; this answers "what is about to stop working", and the
+    # profile most likely to run out today was sold weeks ago. A daily report
+    # that only looked at the last day would never mention it.
+    live = (
+        ESIM.status == ESIMStatus.ACTIVE,
+        ESIM.expires_at.is_not(None),
+        ESIM.expires_at > until,
+        # Unlimited profiles are stored with a zero allowance. Summing them in
+        # would report a total that is smaller than the data actually sold, and
+        # a percentage of zero is not a small number -- it is not a number.
+        ESIM.data_total_mb > 0,
+    )
+    totals = session.execute(
+        select(
+            func.count(ESIM.id),
+            func.coalesce(func.sum(ESIM.data_total_mb), 0),
+            func.coalesce(func.sum(ESIM.data_used_mb), 0),
+        ).where(*live)
+    ).one()
+    report.live_esims = int(totals[0] or 0)
+    report.live_total_mb = int(totals[1] or 0)
+    report.live_used_mb = int(totals[2] or 0)
+
+    running_out_before = until + timedelta(days=RUNNING_OUT_DAYS)
+    report.running_out = [
+        UsageLine(
+            country=row[0] or "—",
+            plan=row[1] or "—",
+            left_mb=max(0, int(row[2]) - int(row[3])),
+            total_mb=int(row[2]),
+            days_left=max(0, (row[4] - until).days),
+        )
+        for row in session.execute(
+            select(
+                Country.name,
+                Plan.title,
+                ESIM.data_total_mb,
+                ESIM.data_used_mb,
+                ESIM.expires_at,
+            )
+            .join(Plan, Plan.id == ESIM.plan_id)
+            .join(Country, Country.id == Plan.country_id)
+            .where(
+                *live,
+                or_(
+                    ESIM.data_used_mb
+                    >= ESIM.data_total_mb * (1 - RUNNING_OUT_MB_SHARE),
+                    ESIM.expires_at <= running_out_before,
+                ),
+            )
+            # Emptiest first: the list is cut at MAX_RUNNING_OUT, so what
+            # survives the cut has to be the part worth acting on.
+            .order_by((ESIM.data_total_mb - ESIM.data_used_mb).asc())
+            .limit(MAX_RUNNING_OUT)
+        ).all()
+    ]
+
     return report
 
 
@@ -426,6 +523,25 @@ def format_report(report: Report) -> str:
             lines.append(
                 f"{supplier.provider}: <b>{supplier.esims} ta</b> · ${_money(supplier.cost_usd)}"
             )
+
+    # Placed above the sales list: it is the section the owner opens the report
+    # for on a quiet day, and the purchases list is what gets scrolled past.
+    if report.live_esims:
+        lines += [
+            "",
+            "<b>📶 TRAFIK (hozirgi holat)</b>",
+            f"Faol: <b>{report.live_esims} ta</b> · "
+            f"qolgan <b>{_data(report.live_left_mb)}</b> / {_data(report.live_total_mb)}",
+        ]
+        if report.running_out:
+            lines.append(f"Tugayapti: <b>{len(report.running_out)} ta</b>")
+            for line in report.running_out:
+                lines.append(
+                    f"• {_escape(line.country)} {_escape(line.plan)} — "
+                    f"<b>{_data(line.left_mb)}</b> qoldi · {line.days_left} kun"
+                )
+        else:
+            lines.append("Tugayotgani yo'q.")
 
     if report.top_countries:
         lines += ["", "<b>🌍 ENG KO'P SOTILGAN</b>"]

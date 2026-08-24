@@ -64,6 +64,8 @@ def _seed_sale(
     expires_at: datetime | None = None,
     esim_status: str = ESIMStatus.ACTIVE,
     complimentary: bool = False,
+    data_total_mb: int = 3072,
+    data_used_mb: int = 0,
 ) -> Order:
     country = Country(
         name=f"Testland {uuid.uuid4().hex[:6]}",
@@ -128,7 +130,8 @@ def _seed_sale(
                 provider=provider,
                 provider_esim_tran_no="tran-1",
                 status=esim_status,
-                data_total_mb=3072,
+                data_total_mb=data_total_mb,
+                data_used_mb=data_used_mb,
                 validity_days=15,
                 created_at=paid_at,
                 expires_at=expires_at,
@@ -336,3 +339,168 @@ async def test_a_giveaway_does_not_count_as_a_buying_customer() -> None:
     assert report.buying_customers == 0
     assert report.orders == 0
     assert report.complimentary_count == 1
+
+
+# --- what is still out there ------------------------------------------------
+#
+# This section of the report answers a different question from every other one:
+# not "what happened in the window" but "what is about to stop working". The
+# profile most likely to run out today was sold weeks ago, so scoping it to the
+# window would have made the daily report structurally unable to mention it.
+
+
+@pytest.mark.asyncio
+async def test_live_totals_ignore_the_report_window() -> None:
+    with worker_session() as session:
+        # Sold long before the one-day window the report is built for.
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(days=40),
+            expires_at=NOW + timedelta(days=20),
+            data_used_mb=500,
+        )
+
+        report = build_report(session, days=1, now=NOW)
+
+        assert report.orders == 0, "the sale itself is outside the window"
+        assert report.live_esims == 1
+        assert report.live_total_mb == 3072
+        assert report.live_used_mb == 500
+        assert report.live_left_mb == 2572
+        session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_an_expired_or_inactive_profile_is_not_live_data() -> None:
+    with worker_session() as session:
+        _seed_sale(session, paid_at=NOW - timedelta(hours=2), expires_at=NOW - timedelta(days=1))
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(hours=3),
+            expires_at=NOW + timedelta(days=5),
+            esim_status=ESIMStatus.PENDING,
+        )
+
+        report = build_report(session, days=1, now=NOW)
+
+        # Neither is data anyone can still use, so neither belongs in a total
+        # the owner reads as "still out there".
+        assert report.live_esims == 0
+        assert report.live_total_mb == 0
+        session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_an_unlimited_profile_is_left_out_of_the_totals() -> None:
+    with worker_session() as session:
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(days=2),
+            expires_at=NOW + timedelta(days=10),
+            data_total_mb=0,
+            data_used_mb=9000,
+        )
+
+        report = build_report(session, days=7, now=NOW)
+
+        # A zero allowance means unlimited here. Summing it would report a total
+        # smaller than the data actually sold.
+        assert report.live_esims == 0
+        assert report.live_total_mb == 0
+        assert report.live_used_mb == 0
+        session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_overspend_never_reports_negative_data_left() -> None:
+    with worker_session() as session:
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(days=3),
+            expires_at=NOW + timedelta(days=6),
+            data_total_mb=1024,
+            data_used_mb=1200,
+        )
+
+        report = build_report(session, days=7, now=NOW)
+
+        # The wholesaler's figure can exceed the allowance sold.
+        assert report.live_used_mb == 1200
+        assert report.live_left_mb == 0
+        session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_running_out_catches_both_ways_a_profile_dies() -> None:
+    with worker_session() as session:
+        # Nearly empty, but weeks of validity left.
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(days=5),
+            expires_at=NOW + timedelta(days=20),
+            data_total_mb=3072,
+            data_used_mb=2900,
+        )
+        # Plenty of data, but expires tomorrow.
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(days=13),
+            expires_at=NOW + timedelta(days=1),
+            data_total_mb=3072,
+            data_used_mb=100,
+        )
+        # Healthy on both axes.
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(days=1),
+            expires_at=NOW + timedelta(days=14),
+            data_total_mb=3072,
+            data_used_mb=500,
+        )
+
+        report = build_report(session, days=30, now=NOW)
+
+        # Either bound alone would have missed one of the first two: 172 MB is
+        # days of life if nobody travels, and 3 GB is worthless tomorrow.
+        assert len(report.running_out) == 2
+        assert report.live_esims == 3
+        # Emptiest first, because the list is cut at MAX_RUNNING_OUT.
+        assert report.running_out[0].left_mb == 172
+        assert report.running_out[0].days_left == 20
+        assert report.running_out[1].left_mb == 2972
+        assert report.running_out[1].days_left == 1
+        session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_the_message_carries_the_traffic_section() -> None:
+    with worker_session() as session:
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(hours=1),
+            expires_at=NOW + timedelta(days=11),
+            data_total_mb=3072,
+            data_used_mb=1124,
+        )
+
+        text = format_report(build_report(session, days=1, now=NOW))
+
+        assert "TRAFIK" in text
+        assert "Faol: <b>1 ta</b>" in text
+        # 1948 MB is what the database holds; the report says what a person says.
+        assert "1.9 GB" in text
+        assert "Tugayotgani yo'q." in text
+        session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_a_shop_with_no_live_profiles_says_nothing_about_traffic() -> None:
+    with worker_session() as session:
+        _seed_sale(session, paid_at=NOW - timedelta(hours=1), expires_at=NOW - timedelta(days=2))
+
+        text = format_report(build_report(session, days=1, now=NOW))
+
+        # An empty section is noise in a message that shares 4096 characters
+        # with the problems list.
+        assert "TRAFIK" not in text
+        session.rollback()
