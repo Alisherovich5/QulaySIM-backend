@@ -275,3 +275,86 @@ class TestReferralCode:
 
         # Stable across calls — a customer's code must not change.
         assert await service.ensure_referral_code(session, customer) == code
+
+
+class TestReferralSummary:
+    """What an agent opens the page to find out.
+
+    The money is the part worth guarding: an agent is paid per invitee who
+    actually pays, and a page that counted sign-ups instead would promise money
+    nobody owes.
+    """
+
+    async def _referral(self, session, referrer, *, status: str, name: str = "") -> None:
+        from app.db.models import Referral
+
+        invitee = None
+        if name:
+            invitee = Customer(
+                email=f"inv-{uuid.uuid4().hex[:10]}@example.com",
+                full_name=name,
+                hashed_password=hash_password("a-long-enough-password"),
+            )
+            session.add(invitee)
+            await session.flush()
+
+        session.add(
+            Referral(
+                referrer_id=referrer.id,
+                referred_id=invitee.id if invitee else None,
+                referred_email=invitee.email if invitee else "waiting@example.com",
+                status=status,
+                reward_code="RWD-1" if status == "completed" else "",
+            )
+        )
+        await session.flush()
+
+    async def test_pays_only_for_invitees_who_bought(self, session) -> None:
+        from app.core.config import settings
+
+        referrer = await _make_customer(session)
+        await self._referral(session, referrer, status="completed", name="Sotib Olgan")
+        await self._referral(session, referrer, status="completed", name="Yana Bittasi")
+        await self._referral(session, referrer, status="pending", name="Hali Olmagan")
+
+        data = await service.referral_summary(session, referrer)
+
+        assert data["invited"] == 3
+        assert data["completed"] == 2
+        assert data["pending"] == 1
+        # Two paid invitees, so two commissions -- not three.
+        assert data["earned_uzs"] == 2 * settings.referral_commission_uzs
+        assert data["commission_uzs"] == settings.referral_commission_uzs
+
+    async def test_lists_the_invitee_by_name(self, session) -> None:
+        referrer = await _make_customer(session)
+        await self._referral(session, referrer, status="completed", name="Dilnur Ibadullayev")
+
+        data = await service.referral_summary(session, referrer)
+        entry = data["entries"][0]
+
+        assert entry["referred_name"] == "Dilnur Ibadullayev"
+        assert entry["referred_email"]
+        assert entry["status"] == "completed"
+
+    async def test_an_invitation_nobody_accepted_is_still_listed(self, session) -> None:
+        """The outer join matters: a pending row has no customer to join to, and
+        dropping it would make the invited count disagree with the list."""
+
+        referrer = await _make_customer(session)
+        await self._referral(session, referrer, status="pending")
+
+        data = await service.referral_summary(session, referrer)
+
+        assert data["invited"] == 1
+        assert len(data["entries"]) == 1
+        assert data["entries"][0]["referred_name"] == ""
+        assert data["earned_uzs"] == 0
+
+    async def test_nothing_earned_before_anyone_joins(self, session) -> None:
+        referrer = await _make_customer(session)
+        data = await service.referral_summary(session, referrer)
+
+        assert data["invited"] == 0
+        assert data["earned_uzs"] == 0
+        assert data["code"]

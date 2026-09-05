@@ -186,6 +186,12 @@ class Settings(BaseSettings):
     # Set to 0 to switch the scheme off. Kept as settings rather than hardcoded
     # because it is a marketing lever the business will want to move, and moving
     # it should not need a deploy of new logic — only a restart.
+    # Referal komissiyasi: taklif qilingan odam BIRINCHI marta to'lov qilganda
+    # taklif qilgan odamga tegadigan naqd summa. Foiz emas, chunki kelishuv ham
+    # foizda emas -- agentlik har bir mijoz uchun qat'iy summa oladi va o'sha
+    # summa tarif narxiga bog'liq emas.
+    referral_commission_uzs: int = 6000
+
     loyalty_cashback_percent: int = 5
     # Which paid order first earns it. 2 means "every purchase after the first".
     loyalty_cashback_from_order: int = 2

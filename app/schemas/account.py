@@ -34,9 +34,11 @@ class AccountSummaryOut(APIModel):
 
 class ReferralEntry(APIModel):
     referred_email: str
+    referred_name: str = ""
     status: str
     reward_code: str
     created_at: datetime
+    completed_at: datetime | None = None
 
 
 class ReferralSummaryOut(APIModel):
@@ -44,6 +46,10 @@ class ReferralSummaryOut(APIModel):
     invited: int
     completed: int
     pending: int
+    # So'mda, chunki agentga naqd shu valyutada to'lanadi. Tarif narxi dollarda
+    # bo'lgani bilan komissiya unga bog'liq emas.
+    commission_uzs: int = 0
+    earned_uzs: int = 0
     rewards: list[str] = []
     entries: list[ReferralEntry] = []
 

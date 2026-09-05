@@ -120,16 +120,40 @@ async def ensure_referral_code(session: AsyncSession, customer: Customer) -> str
 
 
 async def referral_summary(session: AsyncSession, customer: Customer) -> JSONDict:
+    """What the referrer sees about their own link.
+
+    "completed" means the invitee has paid for something at least once -- the
+    same event that mints the reward -- so it is the only count worth paying on.
+    The money is reported alongside it because that is the question an agent
+    actually opens this page to answer, and leaving them to multiply it in their
+    head is how disputes start.
+    """
+
+    from app.core.config import settings
+
     code = await ensure_referral_code(session, customer)
-    rows = await customer_repo.list_referrals(session, customer.id)
-    completed = [r for r in rows if r.status == "completed"]
+    rows = await customer_repo.list_referrals_with_names(session, customer.id)
+    completed = [referral for referral, _ in rows if referral.status == "completed"]
+    rate = int(settings.referral_commission_uzs)
     return {
         "code": code,
         "invited": len(rows),
         "completed": len(completed),
         "pending": len(rows) - len(completed),
+        "commission_uzs": rate,
+        "earned_uzs": len(completed) * rate,
         "rewards": [r.reward_code for r in completed if r.reward_code],
-        "entries": rows,
+        "entries": [
+            {
+                "referred_email": referral.referred_email,
+                "referred_name": name,
+                "status": referral.status,
+                "reward_code": referral.reward_code,
+                "created_at": referral.created_at,
+                "completed_at": referral.completed_at,
+            }
+            for referral, name in rows
+        ],
     }
 
 
