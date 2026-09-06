@@ -402,16 +402,16 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
         # a percentage of zero is not a small number -- it is not a number.
         ESIM.data_total_mb > 0,
     )
-    totals = session.execute(
+    outstanding = session.execute(
         select(
             func.count(ESIM.id),
             func.coalesce(func.sum(ESIM.data_total_mb), 0),
             func.coalesce(func.sum(ESIM.data_used_mb), 0),
         ).where(*live)
     ).one()
-    report.live_esims = int(totals[0] or 0)
-    report.live_total_mb = int(totals[1] or 0)
-    report.live_used_mb = int(totals[2] or 0)
+    report.live_esims = int(outstanding[0] or 0)
+    report.live_total_mb = int(outstanding[1] or 0)
+    report.live_used_mb = int(outstanding[2] or 0)
 
     running_out_before = until + timedelta(days=RUNNING_OUT_DAYS)
     report.running_out = [
@@ -435,8 +435,7 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
             .where(
                 *live,
                 or_(
-                    ESIM.data_used_mb
-                    >= ESIM.data_total_mb * (1 - RUNNING_OUT_MB_SHARE),
+                    ESIM.data_used_mb >= ESIM.data_total_mb * (1 - RUNNING_OUT_MB_SHARE),
                     ESIM.expires_at <= running_out_before,
                 ),
             )
