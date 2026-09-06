@@ -189,21 +189,28 @@ class Settings(BaseSettings):
     # Referal komissiyasi: taklif qilingan odam BIRINCHI marta to'lov qilganda
     # taklif qilgan odamga tegadigan haq.
     #
-    # Pog'onali, chunki kelishuv ham pog'onali: ko'proq mijoz olib kelgan agent
-    # ko'proq oladi. Format -- `<nechanchi mijozdan>:<stavka>`, stavka `5%`
-    # (buyurtma summasidan) yoki `5000` (qat'iy so'm) bo'lishi mumkin. Ikkalasi
-    # ham qo'llab-quvvatlanadi, chunki kelishuv hali ikkala ko'rinishda ham
-    # aytilgan; raqam o'zgarsa kod emas, shu satr o'zgaradi.
-    referral_commission_tiers: str = "0:5%,100:6%,300:6.5%"
+    # Pog'onali stavka: ko'proq mijoz olib kelgan agent ko'proq oladi. Format --
+    # `<nechanchi mijozdan>:<stavka>`, stavka `5%` (buyurtma summasidan) yoki
+    # `5000` (qat'iy so'm) bo'lishi mumkin. Ikkalasi ham qo'llab-quvvatlanadi,
+    # chunki kelishuv hali ikkala ko'rinishda ham aytilgan.
+    #
+    # ATAYLAB BO'SH. Bo'sh bo'lsa pastdagi eski, bir pog'onali sozlama
+    # ishlatiladi -- ya'ni bu kodni joylashtirish agentga aytilgan summani
+    # o'zgartirmaydi. Kelishuv qat'iylashganda .env ga bitta satr yoziladi,
+    # masalan:
+    #
+    #     REFERRAL_COMMISSION_TIERS=0:5%,100:6%,300:6.5%
+    #
+    # Raqamni kod emas, o'sha satr belgilaydi.
+    referral_commission_tiers: str = ""
     # Kim referal bo'limini ko'radi. Bo'sh -- hamma ko'radi. Vergul bilan
     # ajratilgan e-pochtalar yozilsa, faqat o'shalar ko'radi: kelishuv
     # raqamlari hali qat'iy emas, va yakunlanmagan shartni butun mijozlar
     # bazasiga va'da qilib bo'lmaydi. Avval o'zimizda sinaladi, keyin ochiladi.
     referral_visible_to: str = ""
-    # Eski, bir pog'onali sozlama. Faqat yuqoridagisi bo'sh qoldirilganda
-    # ishlatiladi -- serverdagi .env hali eskicha bo'lsa, komissiya jimgina
-    # nolga tushib qolmasin.
-    referral_commission_uzs: int = 0
+    # Eski, bir pog'onali sozlama: har bir sotib olgan mijoz uchun qat'iy summa.
+    # Yuqoridagi pog'onalar bo'sh bo'lganda shu ishlatiladi.
+    referral_commission_uzs: int = 6000
 
     loyalty_cashback_percent: int = 5
     # Which paid order first earns it. 2 means "every purchase after the first".
