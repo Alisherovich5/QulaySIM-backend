@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +14,13 @@ from app.core.security import hash_password, verify_password
 from app.db.models import ESIM, Customer, Testimonial
 from app.db.models.enums import ESIMStatus
 from app.domain import avatars
-from app.domain.referral import new_referral_code
+from app.domain.referral import (
+    CommissionTier,
+    new_referral_code,
+    next_tier,
+    parse_tiers,
+    tier_for,
+)
 from app.repositories import content as content_repo
 from app.repositories import customers as customer_repo
 from app.repositories import orders as order_repo
@@ -119,6 +127,24 @@ async def ensure_referral_code(session: AsyncSession, customer: Customer) -> str
     raise DomainError("Could not allocate a referral code, please retry")
 
 
+def commission_tiers(settings: Any) -> list[CommissionTier]:
+    """Sozlamadagi pog'onalar, eski bir pog'onali sozlamaga qaytish bilan.
+
+    Noto'g'ri yozilgan satr sahifani yiqitmasligi kerak -- referal bo'limi
+    kabinetning ichida, u bilan birga buyurtmalar ham ochilmay qolardi. Lekin
+    jimgina ham o'tmasligi kerak: xato jurnalga yoziladi va komissiya eski
+    sozlamaga tushadi, ya'ni odatda nolga -- o'ylab topilgan raqamga emas.
+    """
+
+    legacy = f"0:{int(settings.referral_commission_uzs)}"
+    raw = (settings.referral_commission_tiers or "").strip() or legacy
+    try:
+        return parse_tiers(raw)
+    except ValueError as exc:
+        logger.error("referral.tiers_invalid", raw=raw, error=str(exc))
+        return parse_tiers(legacy)
+
+
 async def referral_summary(session: AsyncSession, customer: Customer) -> JSONDict:
     """What the referrer sees about their own link.
 
@@ -127,22 +153,54 @@ async def referral_summary(session: AsyncSession, customer: Customer) -> JSONDic
     The money is reported alongside it because that is the question an agent
     actually opens this page to answer, and leaving them to multiply it in their
     head is how disputes start.
+
+    Har bir mijozning haqi u KELGAN paytdagi pog'ona bo'yicha hisoblanadi va
+    keyin qotadi. Aks holda 100-mijoz kelganda oldingi 99 tasi ham qayta
+    hisoblanib, allaqachon aytilgan summa o'zgarib ketardi.
     """
 
     from app.core.config import settings
 
     code = await ensure_referral_code(session, customer)
     rows = await customer_repo.list_referrals_with_names(session, customer.id)
-    completed = [referral for referral, _ in rows if referral.status == "completed"]
-    rate = int(settings.referral_commission_uzs)
+    tiers = commission_tiers(settings)
+
+    # Pog'ona tugash tartibi bo'yicha beriladi, ro'yxat esa yangisi tepada
+    # ko'rinadi -- shuning uchun hisob alohida tartibda yuritiladi.
+    completed = [row for row in rows if row[0].status == "completed"]
+    completed.sort(key=lambda row: (row[0].completed_at or row[0].created_at, row[0].id))
+
+    paid: dict[int, int] = {}
+    for index, (referral, _name, amount_uzs) in enumerate(completed):
+        paid[referral.id] = tier_for(tiers, index).amount_for(amount_uzs or Decimal(0))
+
+    count = len(completed)
+    rate = tier_for(tiers, count)
+    upcoming = next_tier(tiers, count)
+
     return {
         "code": code,
         "invited": len(rows),
-        "completed": len(completed),
-        "pending": len(rows) - len(completed),
-        "commission_uzs": rate,
-        "earned_uzs": len(completed) * rate,
-        "rewards": [r.reward_code for r in completed if r.reward_code],
+        "completed": count,
+        "pending": len(rows) - count,
+        "earned_uzs": sum(paid.values()),
+        "rate": {
+            "label": rate.label,
+            "percent": float(rate.percent) if rate.percent is not None else None,
+            "flat_uzs": rate.flat_uzs,
+        },
+        "next_rate": (
+            {
+                "label": upcoming.label,
+                "percent": float(upcoming.percent) if upcoming.percent is not None else None,
+                "flat_uzs": upcoming.flat_uzs,
+                "at": upcoming.from_count,
+                "needed": upcoming.from_count - count,
+            }
+            if upcoming is not None
+            else None
+        ),
+        "rewards": [row[0].reward_code for row in completed if row[0].reward_code],
         "entries": [
             {
                 "referred_email": referral.referred_email,
@@ -151,8 +209,9 @@ async def referral_summary(session: AsyncSession, customer: Customer) -> JSONDic
                 "reward_code": referral.reward_code,
                 "created_at": referral.created_at,
                 "completed_at": referral.completed_at,
+                "commission_uzs": paid.get(referral.id, 0),
             }
-            for referral, name in rows
+            for referral, name, _amount in rows
         ],
     }
 

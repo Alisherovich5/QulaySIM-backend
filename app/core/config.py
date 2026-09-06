@@ -187,10 +187,18 @@ class Settings(BaseSettings):
     # because it is a marketing lever the business will want to move, and moving
     # it should not need a deploy of new logic — only a restart.
     # Referal komissiyasi: taklif qilingan odam BIRINCHI marta to'lov qilganda
-    # taklif qilgan odamga tegadigan naqd summa. Foiz emas, chunki kelishuv ham
-    # foizda emas -- agentlik har bir mijoz uchun qat'iy summa oladi va o'sha
-    # summa tarif narxiga bog'liq emas.
-    referral_commission_uzs: int = 6000
+    # taklif qilgan odamga tegadigan haq.
+    #
+    # Pog'onali, chunki kelishuv ham pog'onali: ko'proq mijoz olib kelgan agent
+    # ko'proq oladi. Format -- `<nechanchi mijozdan>:<stavka>`, stavka `5%`
+    # (buyurtma summasidan) yoki `5000` (qat'iy so'm) bo'lishi mumkin. Ikkalasi
+    # ham qo'llab-quvvatlanadi, chunki kelishuv hali ikkala ko'rinishda ham
+    # aytilgan; raqam o'zgarsa kod emas, shu satr o'zgaradi.
+    referral_commission_tiers: str = "0:5%,100:6%,300:6.5%"
+    # Eski, bir pog'onali sozlama. Faqat yuqoridagisi bo'sh qoldirilganda
+    # ishlatiladi -- serverdagi .env hali eskicha bo'lsa, komissiya jimgina
+    # nolga tushib qolmasin.
+    referral_commission_uzs: int = 0
 
     loyalty_cashback_percent: int = 5
     # Which paid order first earns it. 2 means "every purchase after the first".

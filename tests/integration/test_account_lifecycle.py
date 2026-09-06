@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -282,11 +282,21 @@ class TestReferralSummary:
 
     The money is the part worth guarding: an agent is paid per invitee who
     actually pays, and a page that counted sign-ups instead would promise money
-    nobody owes.
+    nobody owes. Stavka pog'onali bo'lgani uchun yana bitta shart qo'shildi --
+    olib kelingan mijozning haqi keyinchalik o'zgarmaydi.
     """
 
-    async def _referral(self, session, referrer, *, status: str, name: str = "") -> None:
-        from app.db.models import Referral
+    async def _referral(
+        self,
+        session,
+        referrer,
+        *,
+        status: str,
+        name: str = "",
+        paid_uzs: str | None = "150000",
+        completed_at: datetime | None = None,
+    ) -> None:
+        from app.db.models import Order, Referral
 
         invitee = None
         if name:
@@ -298,6 +308,16 @@ class TestReferralSummary:
             session.add(invitee)
             await session.flush()
 
+            if status == "completed" and paid_uzs is not None:
+                session.add(
+                    Order(
+                        customer_id=invitee.id,
+                        status="paid",
+                        amount_uzs=Decimal(paid_uzs),
+                    )
+                )
+                await session.flush()
+
         session.add(
             Referral(
                 referrer_id=referrer.id,
@@ -305,13 +325,15 @@ class TestReferralSummary:
                 referred_email=invitee.email if invitee else "waiting@example.com",
                 status=status,
                 reward_code="RWD-1" if status == "completed" else "",
+                completed_at=completed_at or (datetime.now(UTC) if status == "completed" else None),
             )
         )
         await session.flush()
 
-    async def test_pays_only_for_invitees_who_bought(self, session) -> None:
+    async def test_pays_only_for_invitees_who_bought(self, session, monkeypatch) -> None:
         from app.core.config import settings
 
+        monkeypatch.setattr(settings, "referral_commission_tiers", "0:5%")
         referrer = await _make_customer(session)
         await self._referral(session, referrer, status="completed", name="Sotib Olgan")
         await self._referral(session, referrer, status="completed", name="Yana Bittasi")
@@ -322,9 +344,95 @@ class TestReferralSummary:
         assert data["invited"] == 3
         assert data["completed"] == 2
         assert data["pending"] == 1
-        # Two paid invitees, so two commissions -- not three.
-        assert data["earned_uzs"] == 2 * settings.referral_commission_uzs
-        assert data["commission_uzs"] == settings.referral_commission_uzs
+        # 150 000 dan 5% -- Dilnur yozgan misolning o'zi.
+        assert data["earned_uzs"] == 15_000
+        assert data["rate"]["label"] == "5%"
+
+    async def test_the_rate_rises_at_the_threshold(self, session, monkeypatch) -> None:
+        """Uchinchi mijozdan boshlab stavka ko'tariladi, oldingilari o'z joyida
+        qoladi. Aks holda allaqachon aytilgan summa keyin o'zgarib ketardi."""
+
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "referral_commission_tiers", "0:5000,2:6000")
+        referrer = await _make_customer(session)
+        for index in range(3):
+            await self._referral(
+                session,
+                referrer,
+                status="completed",
+                name=f"Mijoz {index}",
+                completed_at=datetime.now(UTC) + timedelta(minutes=index),
+            )
+
+        data = await service.referral_summary(session, referrer)
+
+        assert data["earned_uzs"] == 5000 + 5000 + 6000
+        assert [e["commission_uzs"] for e in data["entries"] if e["status"] == "completed"] == [
+            6000,
+            5000,
+            5000,
+        ]
+
+    async def test_shows_what_the_next_threshold_is_worth(self, session, monkeypatch) -> None:
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "referral_commission_tiers", "0:5%,100:6%")
+        referrer = await _make_customer(session)
+        await self._referral(session, referrer, status="completed", name="Birinchi")
+
+        data = await service.referral_summary(session, referrer)
+
+        assert data["next_rate"] == {
+            "label": "6%",
+            "percent": 6.0,
+            "flat_uzs": None,
+            "at": 100,
+            "needed": 99,
+        }
+
+    async def test_no_next_threshold_at_the_top(self, session, monkeypatch) -> None:
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "referral_commission_tiers", "0:5%")
+        referrer = await _make_customer(session)
+
+        data = await service.referral_summary(session, referrer)
+
+        assert data["next_rate"] is None
+
+    async def test_a_broken_setting_does_not_break_the_page(self, session, monkeypatch) -> None:
+        """Kabinetning boshqa bo'limlari ham shu javobga bog'liq."""
+
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "referral_commission_tiers", "yuz foiz")
+        monkeypatch.setattr(settings, "referral_commission_uzs", 6000)
+        referrer = await _make_customer(session)
+        await self._referral(session, referrer, status="completed", name="Sotib Olgan")
+
+        data = await service.referral_summary(session, referrer)
+
+        assert data["earned_uzs"] == 6000
+
+    async def test_an_order_without_a_som_amount_pays_nothing_by_percent(
+        self, session, monkeypatch
+    ) -> None:
+        """Eski buyurtmalarda so'm ustuni bo'sh. Foizni yo'qdan hisoblab
+        bo'lmaydi -- to'qib chiqarilgan summadan ko'ra nol xavfsizroq."""
+
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "referral_commission_tiers", "0:5%")
+        referrer = await _make_customer(session)
+        await self._referral(
+            session, referrer, status="completed", name="Eski Mijoz", paid_uzs=None
+        )
+
+        data = await service.referral_summary(session, referrer)
+
+        assert data["completed"] == 1
+        assert data["earned_uzs"] == 0
 
     async def test_lists_the_invitee_by_name(self, session) -> None:
         referrer = await _make_customer(session)

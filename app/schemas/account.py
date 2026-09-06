@@ -39,6 +39,26 @@ class ReferralEntry(APIModel):
     reward_code: str
     created_at: datetime
     completed_at: datetime | None = None
+    # Aynan shu odam uchun tegadigan summa. Umumiy summani odamlar soniga
+    # bo'lish endi to'g'ri javob bermaydi: stavka pog'onali va har bir mijoz
+    # o'zi kelgan paytdagi stavkani saqlab qoladi.
+    commission_uzs: int = 0
+
+
+class ReferralRate(APIModel):
+    """Hozirgi stavka. `label` -- ekranda ko'rsatiladigan yagona haqiqat."""
+
+    label: str
+    percent: float | None = None
+    flat_uzs: int | None = None
+
+
+class ReferralNextRate(APIModel):
+    label: str
+    percent: float | None = None
+    flat_uzs: int | None = None
+    at: int
+    needed: int
 
 
 class ReferralSummaryOut(APIModel):
@@ -46,10 +66,10 @@ class ReferralSummaryOut(APIModel):
     invited: int
     completed: int
     pending: int
-    # So'mda, chunki agentga naqd shu valyutada to'lanadi. Tarif narxi dollarda
-    # bo'lgani bilan komissiya unga bog'liq emas.
-    commission_uzs: int = 0
+    # So'mda, chunki agentga naqd shu valyutada to'lanadi.
     earned_uzs: int = 0
+    rate: ReferralRate
+    next_rate: ReferralNextRate | None = None
     rewards: list[str] = []
     entries: list[ReferralEntry] = []
 
