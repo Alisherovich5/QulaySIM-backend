@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, UploadFile
 
 from app.api.deps import CurrentCustomer, SessionDep, language_from
-from app.core.errors import ValidationError
+from app.core.errors import NotFoundError, ValidationError
 from app.db.models import ESIM, Order
 from app.repositories import orders as order_repo
 from app.schemas.account import (
@@ -103,6 +103,10 @@ async def update_profile(
 
 @router.get("/referrals", response_model=ReferralSummaryOut)
 async def referrals(session: SessionDep, customer: CurrentCustomer) -> JSONDict:
+    # Bo'limni saytda yashirish kifoya emas: manzilni bilgan odam baribir
+    # ochadi va yopiq stavkani ko'radi. Ruxsat shu yerda ham tekshiriladi.
+    if not service.referral_visible_to(customer):
+        raise NotFoundError("Referral programme not available")
     return await service.referral_summary(session, customer)
 
 

@@ -277,6 +277,45 @@ class TestReferralCode:
         assert await service.ensure_referral_code(session, customer) == code
 
 
+class TestReferralVisibility:
+    """Kim referal bo'limini ko'radi.
+
+    Stavka raqamlari hali kelishilmagan; yakunlanmagan shartni butun mijozlar
+    bazasiga va'da qilib bo'lmaydi. Sozlama bo'sh bo'lsa hamma ko'radi -- ya'ni
+    hech narsa jimgina yopilib qolmaydi.
+    """
+
+    async def test_everyone_sees_it_when_nothing_is_restricted(self, session, monkeypatch) -> None:
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "referral_visible_to", "")
+        customer = await _make_customer(session)
+
+        assert service.referral_visible_to(customer) is True
+
+    async def test_only_the_named_accounts_see_it(self, session, monkeypatch) -> None:
+        from app.core.config import settings
+
+        inside = await _make_customer(session)
+        outside = await _make_customer(session)
+        monkeypatch.setattr(settings, "referral_visible_to", f" {inside.email.upper()} , x@y.z")
+
+        assert service.referral_visible_to(inside) is True
+        assert service.referral_visible_to(outside) is False
+
+    async def test_the_summary_carries_the_answer(self, session, monkeypatch) -> None:
+        """Sayt bo'limni shu bayroqqa qarab chizadi."""
+
+        from app.core.config import settings
+
+        customer = await _make_customer(session)
+        monkeypatch.setattr(settings, "referral_visible_to", "somebody-else@example.com")
+
+        data = await service.summary(session, customer)
+
+        assert data["referral_enabled"] is False
+
+
 class TestReferralSummary:
     """What an agent opens the page to find out.
 

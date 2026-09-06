@@ -195,6 +195,11 @@ class Settings(BaseSettings):
     # ham qo'llab-quvvatlanadi, chunki kelishuv hali ikkala ko'rinishda ham
     # aytilgan; raqam o'zgarsa kod emas, shu satr o'zgaradi.
     referral_commission_tiers: str = "0:5%,100:6%,300:6.5%"
+    # Kim referal bo'limini ko'radi. Bo'sh -- hamma ko'radi. Vergul bilan
+    # ajratilgan e-pochtalar yozilsa, faqat o'shalar ko'radi: kelishuv
+    # raqamlari hali qat'iy emas, va yakunlanmagan shartni butun mijozlar
+    # bazasiga va'da qilib bo'lmaydi. Avval o'zimizda sinaladi, keyin ochiladi.
+    referral_visible_to: str = ""
     # Eski, bir pog'onali sozlama. Faqat yuqoridagisi bo'sh qoldirilganda
     # ishlatiladi -- serverdagi .env hali eskicha bo'lsa, komissiya jimgina
     # nolga tushib qolmasin.

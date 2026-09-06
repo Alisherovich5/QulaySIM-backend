@@ -30,6 +30,10 @@ class AccountSummaryOut(APIModel):
     # so it cannot ride along on one.
     avatar_url: str | None = None
     passport: list[PassportCountry] = []
+    # Referal bo'limi shu mijozga ko'rinadimi. Sayt shu bayroqqa qarab
+    # bo'limni umuman chizmaydi -- yopiq bo'lim ko'rinib turib "ruxsat yo'q"
+    # deyishdan ko'ra, umuman ko'rinmagani tinch.
+    referral_enabled: bool = True
 
 
 class ReferralEntry(APIModel):

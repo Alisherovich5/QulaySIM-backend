@@ -45,7 +45,26 @@ async def summary(session: AsyncSession, customer: Customer, *, language: str = 
         "orders_count": rows["orders_count"],
         "avatar_url": avatars.to_data_uri(customer.avatar_webp),
         "passport": passport,
+        "referral_enabled": referral_visible_to(customer),
     }
+
+
+def referral_visible_to(customer: Customer) -> bool:
+    """Bu mijoz referal bo'limini ko'radimi.
+
+    Sozlama bo'sh bo'lsa -- hamma ko'radi. Ro'yxat yozilgan bo'lsa, faqat
+    o'shalar: stavka raqamlari kelishilmagan paytda uni butun bazaga va'da
+    qilish keyin orqaga qaytarib bo'lmaydigan va'da bo'ladi.
+    """
+
+    from app.core.config import settings
+
+    allowed = {
+        item.strip().lower()
+        for item in (settings.referral_visible_to or "").split(",")
+        if item.strip()
+    }
+    return not allowed or customer.email.strip().lower() in allowed
 
 
 async def set_avatar(session: AsyncSession, customer: Customer, raw: bytes) -> None:
