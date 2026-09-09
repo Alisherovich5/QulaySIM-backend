@@ -73,6 +73,15 @@ ignore_missing_imports = true
 module = "app.workers.tasks.*"
 disallow_untyped_decorators = false
 
+[[tool.mypy.overrides]]
+# pillow-heif ships type hints but no __all__, so strict mode's
+# no-implicit-reexport rejects `register_heif_opener` -- the library's own
+# documented entry point. Version-dependent: 1.5 passes, 1.7 does not, and CI
+# installs the latest. Relaxed for this one third-party module rather than
+# silenced at the import, which would also hide a real error there later.
+module = "pillow_heif"
+implicit_reexport = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # One event loop for the whole session: the engine and Redis client are
