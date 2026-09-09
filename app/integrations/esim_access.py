@@ -187,11 +187,43 @@ class EsimAccessClient:
             {"transactionId": transaction_id, "packageCode": package_code, "iccid": iccid},
         )
 
+    PROFILE_PAGE_SIZE = 50
+    # Bir chaqiruvda cheksiz sahifa so'ramaslik uchun. 40 sahifa = 2000 profil;
+    # bundan oshsa halqa emas, ta'minotchi tomonda nimadir noto'g'ri.
+    PROFILE_PAGE_LIMIT = 40
+
     def query_profiles(self, *, order_no: str) -> dict[str, Any]:
-        return self._post(
-            "/api/v1/open/esim/query",
-            {"orderNo": order_no, "pager": {"pageNum": 1, "pageSize": 50}},
-        )
+        """Barcha profillar -- bitta sahifa emas.
+
+        Ilgari faqat 1-sahifa (50 ta) so'ralardi. Bugun 17 ta profil bor,
+        ya'ni hammasi bitta sahifaga sig'adi va hech narsa sezilmaydi. 50 dan
+        oshgan kunda esa eng eskilari ro'yxatdan tushib qolar edi va ularning
+        traffigi JIMGINA yangilanmay qolardi -- mijoz "qancha qolganini
+        ko'rsatmayapti" deb yozardi, sabab esa hech qayerda ko'rinmasdi.
+
+        Javob eski shaklda qaytariladi (bitta `esimList`), chunki chaqiruvchi
+        kod uni shunday o'qiydi.
+        """
+
+        merged: list[dict[str, Any]] = []
+        last: dict[str, Any] = {}
+        for page in range(1, self.PROFILE_PAGE_LIMIT + 1):
+            last = self._post(
+                "/api/v1/open/esim/query",
+                {
+                    "orderNo": order_no,
+                    "pager": {"pageNum": page, "pageSize": self.PROFILE_PAGE_SIZE},
+                },
+            )
+            batch = ((last.get("obj") or {}).get("esimList") or []) if last else []
+            merged.extend(batch)
+            # To'liq bo'lmagan sahifa -- oxirgisi. Bo'sh sahifa ham shu.
+            if len(batch) < self.PROFILE_PAGE_SIZE:
+                break
+
+        obj = dict(last.get("obj") or {}) if last else {}
+        obj["esimList"] = merged
+        return {**last, "obj": obj}
 
     def cancel_profile(self, *, esim_tran_no: str) -> dict[str, Any]:
         return self._post("/api/v1/open/esim/cancel", {"esimTranNo": esim_tran_no})
