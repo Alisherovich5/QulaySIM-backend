@@ -56,3 +56,36 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
 
 async def dispose_engine() -> None:
     await engine.dispose()
+
+
+@asynccontextmanager
+async def task_sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """O'ziga xos dvigatel -- o'z hodisa halqasini yaratadigan vazifa uchun.
+
+    Yuqoridagi `engine` modul darajasida bir marta yaratiladi va birinchi
+    ishlatilgan hodisa halqasiga bog'lanib qoladi. Celery vazifasi esa har
+    safar `asyncio.run()` bilan YANGI halqa ochadi, ya'ni ikkinchi
+    chaqirishda o'sha ulanishlar boshqa halqadan turib ishlatiladi va
+    asyncpg "got Future attached to a different loop" deb yiqiladi --
+    `warm_catalog_cache` logda aynan shuni yozib turgan edi.
+
+    `NullPool`: umuman hovuz yo'q, ya'ni halqadan omon qoladigan ulanish ham
+    yo'q. Vazifa 10 daqiqada bir ishlaydi, ulanish ochish narxi sezilmaydi.
+    """
+
+    from sqlalchemy.pool import NullPool
+
+    task_engine = create_async_engine(
+        str(settings.database_url),
+        echo=settings.db_echo,
+        poolclass=NullPool,
+    )
+    try:
+        yield async_sessionmaker(
+            bind=task_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            autoflush=False,
+        )
+    finally:
+        await task_engine.dispose()

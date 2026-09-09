@@ -64,6 +64,10 @@ class ESIMOut(APIModel):
     activated_at: datetime | None = None
     expires_at: datetime | None = None
     created_at: datetime
+    # Traffik oxirgi marta qachon so'ralgani. Sayt shu vaqtni sarf raqami
+    # yonida ko'rsatadi: "0 GB sarflangan" yolg'iz turganda mijoz uni buzuq
+    # deb o'qiydi, "15:20 da yangilandi" bilan esa -- javob deb.
+    last_synced_at: datetime | None = None
     # What was actually paid for this eSIM, frozen at the sale. Null when the
     # order line is gone, which is shown as unknown rather than filled in with
     # the plan's current price — a customer who bought before a repricing would

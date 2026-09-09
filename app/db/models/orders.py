@@ -123,6 +123,9 @@ class ESIM(Base):
     validity_days: Mapped[int] = mapped_column(Integer, default=7)
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Ta'minotchidan traffik oxirgi marta qachon so'ralgani. Sxema Django
+    # tomonida (orders/migrations/0017_esim_last_synced_at.py).
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     order: Mapped[Order] = relationship(back_populates="esims")

@@ -180,3 +180,70 @@ async def test_an_empty_answer_changes_nothing(monkeypatch) -> None:
 
     with worker_session() as session:
         assert session.get(ESIM, esim_id).data_used_mb == 200
+
+
+async def test_the_check_time_is_written_even_when_nothing_moved(monkeypatch) -> None:
+    """Aynan shikoyat qilgan mijoz uchun ishlashi kerak.
+
+    Chet elga hali yetib bormagan odamning sarfi nol bo'lib turadi va
+    o'zgarmaydi. Vaqt faqat raqam o'zgarganda yozilsa, uning sahifasida
+    "qachon yangilandi" hech qachon paydo bo'lmasdi -- ya'ni "0 GB
+    sarflangan, sayt buzuq" degan savol javobsiz qolardi.
+    """
+
+    from app.integrations.esim_access import _parse_supplier_date
+    from app.workers.session import worker_session
+
+    profile = _profile(orderUsage=0, esimStatus="IN_USE")
+
+    with worker_session() as session:
+        esim = _seed(session)
+        esim_id = esim.id
+        # Qator ALLAQACHON ta'minotchi bilan bir xil: sarf ham, holat ham,
+        # muddat ham. Ya'ni bu o'tishda hech qanday maydon o'zgarmaydi --
+        # Abdurazzoqning qatori aynan shunday turgan.
+        esim.data_used_mb = 0
+        esim.provider_status = "IN_USE"
+        esim.status = ESIMStatus.ACTIVE
+        esim.expires_at = _parse_supplier_date(profile["expiredTime"])
+        session.commit()
+
+    client = FakeClient([profile])
+    before = datetime.now(UTC)
+    _run(monkeypatch, client)
+
+    with worker_session() as session:
+        row = session.get(ESIM, esim_id)
+        assert row is not None
+        # Sarf o'zgarmadi -- aynan shikoyat qilgan mijozning holati...
+        assert row.data_used_mb == 0
+        # ...lekin tekshirilgan vaqt baribir yozildi.
+        assert row.last_synced_at is not None
+        assert row.last_synced_at >= before
+
+
+async def test_every_row_in_one_pass_gets_the_same_time(monkeypatch) -> None:
+    """Bitta o'lchov -- bitta vaqt.
+
+    Har bir qator uchun alohida `utcnow()` olinsa, bir o'tishda yozilgan
+    vaqtlar bir-biridan farq qilib, sahifada bir eSIM "hozir", boshqasi
+    "1 daqiqa oldin" deb ko'rinardi.
+    """
+
+    from app.workers.session import worker_session
+
+    second = "26080915410099"
+    with worker_session() as session:
+        a = _seed(session)
+        b = _seed(session, tran_no=second)
+        ids = (a.id, b.id)
+        session.commit()
+
+    client = FakeClient([_profile(), _profile(esimTranNo=second)])
+    _run(monkeypatch, client)
+
+    with worker_session() as session:
+        times = {session.get(ESIM, i).last_synced_at for i in ids}
+
+    assert len(times) == 1
+    assert None not in times

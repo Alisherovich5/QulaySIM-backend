@@ -63,7 +63,7 @@ def refresh_currency_rate() -> float:
 @celery_app.task(name="maintenance.warm_catalog_cache")
 def warm_catalog_cache() -> int:
     from app.core.cache import close_redis
-    from app.db.session import SessionFactory, dispose_engine
+    from app.db.session import task_sessions
     from app.domain.localisation import SUPPORTED_LANGUAGES
     from app.services.catalog import invalidate_catalog, list_countries, list_regions
 
@@ -71,7 +71,9 @@ def warm_catalog_cache() -> int:
         try:
             await invalidate_catalog()
             total = 0
-            async with SessionFactory() as session:
+            # Modul darajasidagi dvigatel emas: u birinchi halqaga bog'lanib
+            # qoladi va bu vazifa har safar yangi halqa ochadi.
+            async with task_sessions() as sessions, sessions() as session:
                 # Every supported language: the catalogue is cached per language
                 # now, so warming only English left uz and ru visitors paying the
                 # cold query after each invalidation.
@@ -90,7 +92,6 @@ def warm_catalog_cache() -> int:
             return total
         finally:
             await close_redis()
-            await dispose_engine()
 
     count = asyncio.run(run())
     logger.info("maintenance.catalog_warmed", countries=count)
@@ -132,6 +133,7 @@ def refresh_esim_usage() -> int:
     """
     from math import ceil
 
+    from app.db.base import utcnow
     from app.integrations.esim_access import (
         EsimAccessClient,
         _local_status,
@@ -152,6 +154,9 @@ def refresh_esim_usage() -> int:
         return 0
 
     updated = 0
+    # Bitta o'lchov -- bitta vaqt. Har bir qator uchun alohida olinsa, bir
+    # o'tishda yozilgan vaqtlar bir-biridan farq qilib turardi.
+    checked_at = utcnow()
     with worker_session() as session:
         rows = (
             session.execute(
@@ -186,6 +191,13 @@ def refresh_esim_usage() -> int:
                 for field, value in fresh.items():
                     setattr(esim, field, value)
                 updated += 1
+
+            # Vaqt esa sarf o'zgarmasa ham yoziladi, va ataylab shunday: bu
+            # ustun "raqam o'zgardi" degani emas, "biz shu payt tekshirdik"
+            # degani. Faqat o'zgarganda yozilsa, umuman internet
+            # sarflamagan mijozning sahifasida vaqt hech qachon paydo
+            # bo'lmasdi -- ya'ni aynan shikoyat qilgan odam uchun ishlamasdi.
+            esim.last_synced_at = checked_at
         session.commit()
 
     if updated:
