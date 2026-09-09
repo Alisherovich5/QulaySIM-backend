@@ -16,7 +16,7 @@ from app.integrations.esim_access import EsimAccessClient
 class Recorder(EsimAccessClient):
     """Haqiqiy `query_profiles` ni ishlatadi, faqat tarmoqni almashtiradi."""
 
-    def __init__(self, pages: list[list[dict[str, Any]]]):  # noqa: D107
+    def __init__(self, pages: list[list[dict[str, Any]]]):
         self._pages = pages
         self.asked: list[int] = []
 
