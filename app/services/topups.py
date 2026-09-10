@@ -23,6 +23,7 @@ the sweep reads it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -48,6 +49,38 @@ PRICE_DIVISOR = Decimal("10000")
 #: mispriced or misparsed package reaching the payment page.
 MAX_PRICE_USD = Decimal("500")
 
+#: Wholesaler states in which more data can still be attached to the profile.
+#:
+#: `USED_UP` belongs here and that is the whole point. It means the ALLOWANCE is
+#: gone, not the validity -- which is exactly the customer a top-up exists for.
+#: Our own `status` column collapses it to "expired" together with the states
+#: where time really has run out, so reading that column refused the sale to the
+#: one person who wanted to make it. Two customers were blocked this way, with
+#: 20 and 11 days left on their plans.
+TOPPABLE_PROVIDER_STATUSES = frozenset({"IN_USE", "GOT_RESOURCE", "USED_UP"})
+
+
+def is_toppable(esim: ESIM, *, now: datetime | None = None) -> bool:
+    """Whether the wholesaler will still add data to this profile.
+
+    Two independent ways to be finished, and only one of them blocks a top-up:
+    the allowance can be spent (topping up is the remedy) or the validity can
+    have elapsed (nothing to attach data to).
+    """
+
+    if esim.provider not in TOPUP_PROVIDERS or not esim.iccid:
+        return False
+    if (esim.provider_status or "") not in TOPPABLE_PROVIDER_STATUSES:
+        return False
+    if esim.expires_at is not None:
+        moment = now or datetime.now(UTC)
+        expires = esim.expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=UTC)
+        if expires <= moment:
+            return False
+    return True
+
 
 @dataclass(frozen=True)
 class TopUp:
@@ -67,16 +100,17 @@ class TopUp:
         return f"{self.data_mb} MB"
 
 
-async def _markup(session: AsyncSession, data_mb: int, days: int) -> Decimal:
-    """The markup percentage a top-up of this shape should carry.
+async def _rule_for(session: AsyncSession, data_mb: int, days: int) -> PricingRule | None:
+    """The pricing rule a top-up of this shape falls under, or None.
 
     Resolution is the narrow version of what Django does: a tier rule for this
     exact size (optionally pinned to a duration) wins, otherwise the house
     default. The per-destination and per-supplier scopes are deliberately not
-    consulted — they exist to correct a specific destination's retail price, and
+    consulted -- they exist to correct a specific destination's retail price, and
     a top-up is priced off a cost the wholesaler quoted seconds ago rather than
     off that destination's ladder.
     """
+
     rules = (
         (await session.execute(select(PricingRule).where(PricingRule.is_active.is_(True))))
         .scalars()
@@ -90,21 +124,46 @@ async def _markup(session: AsyncSession, data_mb: int, days: int) -> Decimal:
     if tier:
         # Most specific first: a rule naming the duration beats one that does not.
         tier.sort(key=lambda rule: (rule.tier_days is None,))
-        return Decimal(tier[0].markup_percent)
+        return tier[0]
     house = [rule for rule in rules if rule.scope == "global"]
-    if house:
-        return Decimal(house[0].markup_percent)
-    # No rules configured at all. 50% is the house default in the admin's own
-    # seed; refusing to price would take top-ups offline for a configuration
-    # question nobody asked.
+    return house[0] if house else None
+
+
+def _markup_of(rule: PricingRule | None, data_mb: int, days: int) -> Decimal:
+    """The markup percentage this rule carries, with a last-resort default.
+
+    No rules configured at all is a configuration question, not a reason to take
+    top-ups offline; 50% is the house default in the admin's own seed.
+    """
+
+    if rule is not None:
+        return Decimal(rule.markup_percent)
     logger.warning("topups.no_pricing_rule", data_mb=data_mb, days=days)
     return Decimal("50")
 
 
-def _price(cost: Decimal, markup: Decimal) -> Decimal:
-    return (cost * (Decimal("1") + markup / Decimal("100"))).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
+def _floor_of(rule: PricingRule | None) -> Decimal | None:
+    """The rule's absolute margin floor in dollars, if it sets one."""
+
+    if rule is None or rule.min_margin_usd is None:
+        return None
+    return Decimal(rule.min_margin_usd)
+
+
+def _price(cost: Decimal, markup: Decimal, floor_usd: Decimal | None = None) -> Decimal:
+    """Cost plus the markup, but never less than the rule's absolute floor.
+
+    The floor was being ignored here while Django applied it, so the two ladders
+    the module docstring promises are the same one had in fact drifted. On the
+    thin tiers -- 10 GB is +25%, 50 GB is +15% -- that is the difference between
+    a top-up carrying a margin and a top-up quoting a number a few cents above
+    what we paid for it, which is what a customer photographed and sent in.
+    """
+
+    price = cost * (Decimal("1") + markup / Decimal("100"))
+    if floor_usd is not None and floor_usd > 0:
+        price = max(price, cost + floor_usd)
+    return price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 def _volume_mb(package: dict[str, Any]) -> int:
@@ -123,7 +182,10 @@ async def available(session: AsyncSession, esim: ESIM) -> list[TopUp]:
     reached: the account page then says top-ups are unavailable right now, which
     is true and recoverable, instead of failing the whole page.
     """
-    if esim.provider not in TOPUP_PROVIDERS or not esim.iccid:
+    # Ro'yxat ham, to'lov ham bitta qoidaga tayanadi. Aks holda mijoz narxlarni
+    # ko'rib, tanlab, to'lov paytida "bo'lmaydi" degan javob oladi -- aynan shu
+    # bo'lgan edi.
+    if not is_toppable(esim):
         return []
 
     from app.integrations.esim_access import EsimAccessClient, EsimAccessError
@@ -153,7 +215,8 @@ async def available(session: AsyncSession, esim: ESIM) -> list[TopUp]:
         cost = (Decimal(str(raw_price)) / PRICE_DIVISOR).quantize(Decimal("0.01"))
         if cost <= 0:
             continue
-        price = _price(cost, await _markup(session, data_mb, days))
+        rule = await _rule_for(session, data_mb, days)
+        price = _price(cost, _markup_of(rule, data_mb, days), _floor_of(rule))
         # A top-up that would sell at or below cost is not offered at all. Same
         # rule as the catalogue: an order that loses money is worse than an
         # option the customer never saw.

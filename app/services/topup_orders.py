@@ -105,9 +105,11 @@ async def place(
     """Create a pending top-up order and return the link that pays for it."""
     esim = await owned_esim(session, customer, esim_id)
 
-    if esim.status in ("expired", "cancelled"):
-        # Topping up a dead profile would take money for data the wholesaler will
-        # not attach to anything.
+    # Our own `status` column says "expired" both when the allowance is spent and
+    # when the validity has elapsed. Only the second one makes a top-up
+    # impossible; the first one is the reason top-ups exist. Reading the
+    # wholesaler's own state tells the two apart.
+    if not topup_service.is_toppable(esim):
         raise DomainError("This eSIM can no longer be topped up", code="esim_not_toppable")
 
     option = await topup_service.find(session, esim, package_code)

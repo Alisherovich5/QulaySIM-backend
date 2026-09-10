@@ -9,6 +9,7 @@ trust instead, by making the alert cry wolf until nobody reads it.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -19,11 +20,12 @@ pytestmark = pytest.mark.anyio
 
 
 class _Rule:
-    def __init__(self, scope, markup, tier_mb=None, tier_days=None):
+    def __init__(self, scope, markup, tier_mb=None, tier_days=None, min_margin=None):
         self.scope = scope
         self.markup_percent = Decimal(str(markup))
         self.tier_data_mb = tier_mb
         self.tier_days = tier_days
+        self.min_margin_usd = None if min_margin is None else Decimal(str(min_margin))
         self.is_active = True
 
 
@@ -62,27 +64,36 @@ class _Esim:
     provider = "esimaccess"
     iccid = "8997250230001244458"
     plan_id = 1
+    # Ta'minotchining holati -- to'ldirish mumkinligini AYNAN shu hal qiladi,
+    # bizning `status` ustuni emas.
+    provider_status = "IN_USE"
+    expires_at = None
 
 
 class TestPricing:
     async def test_a_tier_rule_beats_the_house_default(self) -> None:
         session = _Session([_Rule("global", 50), _Rule("tier", 25, tier_mb=10240)])
-        assert await topups._markup(session, 10240, 30) == Decimal("25")
+        rule = await topups._rule_for(session, 10240, 30)
+        assert topups._markup_of(rule, 10240, 30) == Decimal("25")
 
     async def test_a_rule_naming_the_duration_beats_one_that_does_not(self) -> None:
         session = _Session(
             [_Rule("tier", 40, tier_mb=1024), _Rule("tier", 60, tier_mb=1024, tier_days=7)]
         )
-        assert await topups._markup(session, 1024, 7) == Decimal("60")
+        rule = await topups._rule_for(session, 1024, 7)
+        assert topups._markup_of(rule, 1024, 7) == Decimal("60")
 
     async def test_the_house_default_applies_to_a_shape_with_no_rung(self) -> None:
         session = _Session([_Rule("global", 50), _Rule("tier", 25, tier_mb=10240)])
-        assert await topups._markup(session, 2048, 3) == Decimal("50")
+        rule = await topups._rule_for(session, 2048, 3)
+        assert topups._markup_of(rule, 2048, 3) == Decimal("50")
 
     async def test_no_rules_at_all_still_prices(self) -> None:
         """Refusing to price would take top-ups offline over a configuration
         question nobody asked."""
-        assert await topups._markup(_Session([]), 1024, 7) == Decimal("50")
+        rule = await topups._rule_for(_Session([]), 1024, 7)
+        assert rule is None
+        assert topups._markup_of(rule, 1024, 7) == Decimal("50")
 
     def test_the_markup_is_applied_to_the_cost(self) -> None:
         assert topups._price(Decimal("0.46"), Decimal("60")) == Decimal("0.74")
@@ -165,11 +176,14 @@ class TestLabels:
 # --- helpers ---------------------------------------------------------------
 
 
-def _fixed_markup(percent):
-    async def _markup(_session, _mb, _days):
-        return Decimal(str(percent))
+def _fixed_rule(percent, min_margin=None):
+    """`_rule_for` o'rniga: narx hisobi endi foizni ham, polni ham qoidadan
+    oladi, ya'ni testda ham bitta manba bo'lishi kerak."""
 
-    return _markup
+    async def _rule_for(_session, _mb, _days):
+        return _Rule("global", percent, min_margin=min_margin)
+
+    return _rule_for
 
 
 def _client(packages):
@@ -182,7 +196,103 @@ def _client(packages):
     return lambda: _Client()
 
 
-async def _available(monkeypatch, packages, markup=50):
-    monkeypatch.setattr(topups, "_markup", _fixed_markup(markup))
+async def _available(monkeypatch, packages, markup=50, min_margin=None):
+    monkeypatch.setattr(topups, "_rule_for", _fixed_rule(markup, min_margin))
     monkeypatch.setattr("app.integrations.esim_access.EsimAccessClient", _client(packages))
     return await topups.available(_Session([]), _Esim())
+
+
+class TestWhoCanTopUp:
+    """Ikki xil "tugadi" bor va faqat bittasi to'ldirishga to'sqinlik qiladi.
+
+    Mijoz yozdi: "мегабайтим тугаб қоганди, кўшимча пакет сотиб олмоқчи эдим,
+    имкони бўлмаяпти". Hajmi tugagan -- to'ldirish aynan shu uchun bor; kod esa
+    bizning `status` ustunini o'qib, uni muddati o'tganlar bilan bir qatorga
+    qo'ygan va sotuvni rad qilgan. O'sha payt shu holatda ikki mijoz turgan
+    edi, tariflarida 20 va 11 kun qolgan.
+    """
+
+    def _esim(self, **over):
+        esim = _Esim()
+        for key, value in over.items():
+            setattr(esim, key, value)
+        return esim
+
+    def test_spent_allowance_can_still_be_topped_up(self) -> None:
+        future = datetime(2026, 9, 30, tzinfo=UTC)
+        esim = self._esim(provider_status="USED_UP", expires_at=future)
+
+        assert topups.is_toppable(esim, now=datetime(2026, 9, 10, tzinfo=UTC)) is True
+
+    def test_elapsed_validity_cannot(self) -> None:
+        """Muddati o'tgan profilga ta'minotchi hajm ulamaydi -- pul olib,
+        hech narsa bermagan bo'lardik."""
+
+        past = datetime(2026, 9, 7, tzinfo=UTC)
+        esim = self._esim(provider_status="USED_UP", expires_at=past)
+
+        assert topups.is_toppable(esim, now=datetime(2026, 9, 10, tzinfo=UTC)) is False
+
+    def test_a_working_profile_can(self) -> None:
+        esim = self._esim(provider_status="IN_USE", expires_at=datetime(2026, 10, 8, tzinfo=UTC))
+
+        assert topups.is_toppable(esim, now=datetime(2026, 9, 10, tzinfo=UTC)) is True
+
+    def test_a_revoked_profile_cannot(self) -> None:
+        esim = self._esim(provider_status="REVOKE", expires_at=datetime(2026, 10, 8, tzinfo=UTC))
+
+        assert topups.is_toppable(esim, now=datetime(2026, 9, 10, tzinfo=UTC)) is False
+
+    def test_a_naive_expiry_is_not_a_crash(self) -> None:
+        """Bazadan vaqt mintaqasiz kelishi mumkin. Solishtirishda bu TypeError
+        beradi, ya'ni butun kabinet sahifasi yiqilardi."""
+
+        esim = self._esim(provider_status="USED_UP", expires_at=datetime(2026, 9, 30))
+
+        assert topups.is_toppable(esim, now=datetime(2026, 9, 10, tzinfo=UTC)) is True
+
+    def test_another_wholesaler_offers_none(self) -> None:
+        esim = self._esim(provider="esimcard")
+
+        assert topups.is_toppable(esim) is False
+
+    async def test_the_list_is_empty_when_the_sale_would_be_refused(self, monkeypatch) -> None:
+        """Narxlarni ko'rsatib, keyin to'lovda "bo'lmaydi" deyish -- aynan
+        mijoz duch kelgan tartib. Ro'yxat ham, to'lov ham bitta qoidaga
+        tayanadi."""
+
+        monkeypatch.setattr(topups, "_rule_for", _fixed_rule(50))
+        monkeypatch.setattr("app.integrations.esim_access.EsimAccessClient", _client([_package()]))
+        dead = self._esim(provider_status="USED_EXPIRED")
+
+        assert await topups.available(_Session([]), dead) == []
+
+
+class TestTheMarginFloor:
+    """Qoidadagi dollarlik pol Django tomonda qo'llanardi, bu yerda esa yo'q.
+
+    Natijada yupqa pog'onalarda (10 GB +25%, 50 GB +15%) to'ldirish tannarxdan
+    bir necha sent yuqorida narx aytardi -- mijoz aynan shuni suratga olib
+    yuborgan.
+    """
+
+    async def test_the_floor_lifts_a_thin_percentage(self, monkeypatch) -> None:
+        # $4.60 tannarx, +25% = $5.75. $1.50 pol bilan $6.10 bo'lishi kerak.
+        options = await _available(monkeypatch, [_package()], markup=25, min_margin=Decimal("1.50"))
+
+        assert options[0].cost_usd == Decimal("0.46")
+        assert options[0].price_usd == Decimal("1.96")
+
+    async def test_a_generous_percentage_is_left_alone(self, monkeypatch) -> None:
+        """Pol -- pol, tepa emas. Foiz undan yuqori bo'lsa, foiz qoladi."""
+
+        options = await _available(
+            monkeypatch, [_package()], markup=200, min_margin=Decimal("0.10")
+        )
+
+        assert options[0].price_usd == Decimal("1.38")
+
+    async def test_no_floor_configured_changes_nothing(self, monkeypatch) -> None:
+        options = await _available(monkeypatch, [_package()], markup=50, min_margin=None)
+
+        assert options[0].price_usd == Decimal("0.69")
