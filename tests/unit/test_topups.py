@@ -196,8 +196,13 @@ def _client(packages):
     return lambda: _Client()
 
 
-async def _available(monkeypatch, packages, markup=50, min_margin=None):
+async def _available(monkeypatch, packages, markup=50, min_margin=None, retail=None):
     monkeypatch.setattr(topups, "_rule_for", _fixed_rule(markup, min_margin))
+
+    async def _retail(*_args, **_kwargs):
+        return None if retail is None else Decimal(str(retail))
+
+    monkeypatch.setattr(topups, "_retail_price_for", _retail)
     monkeypatch.setattr("app.integrations.esim_access.EsimAccessClient", _client(packages))
     return await topups.available(_Session([]), _Esim())
 
@@ -296,3 +301,122 @@ class TestTheMarginFloor:
         options = await _available(monkeypatch, [_package()], markup=50, min_margin=None)
 
         assert options[0].price_usd == Decimal("0.69")
+
+
+class TestATopUpIsNeverCheaperThanBuyingItNew:
+    """The arbitrage the owner spotted, and the numbers it was worth.
+
+    China 5 GB / 30 days costs us $2.96. The 5 GB rung is +35%, so the top-up
+    quoted $4.00 — while the identical package sold as a plan is $7.99, a price
+    set by hand and reproducible by no percentage of cost. A customer could buy
+    1 GB for $2.20, top it up with 5 GB for $4.00, and hold 6 GB for $6.20
+    against $7.99 for 5 GB bought normally. Orders #121 and #122 went out at
+    $4.00 before anyone noticed: $3.99 of margin each.
+    """
+
+    async def test_the_counter_price_wins_when_the_ladder_is_under_it(self, monkeypatch) -> None:
+        options = await _available(
+            monkeypatch,
+            [_package(gb=5, days=30, price_ten_thousandths=29_600)],
+            markup=35,
+            retail="7.99",
+        )
+
+        assert [option.price_usd for option in options] == [Decimal("7.99")]
+        # The cost is untouched, so the margin reported on the sale is real.
+        assert options[0].cost_usd == Decimal("2.96")
+
+    async def test_the_ladder_wins_when_it_is_above_the_counter_price(self, monkeypatch) -> None:
+        """Dearer is allowed. A top-up is a convenience and may carry more
+        margin than the shelf price; only cheaper is forbidden."""
+        options = await _available(
+            monkeypatch,
+            [_package(gb=5, days=30, price_ten_thousandths=29_600)],
+            markup=200,
+            retail="7.99",
+        )
+
+        assert [option.price_usd for option in options] == [Decimal("8.88")]
+
+    async def test_a_package_we_do_not_sell_as_a_plan_keeps_the_ladder(self, monkeypatch) -> None:
+        options = await _available(
+            monkeypatch,
+            [_package(gb=5, days=30, price_ten_thousandths=29_600)],
+            markup=35,
+            retail=None,
+        )
+
+        assert [option.price_usd for option in options] == [Decimal("4.00")]
+
+
+class TestMatchingATopUpToThePlanItTopsUp:
+    """`TOPUP_JC054` is `JC054` with more of the same on it."""
+
+    class _Plan:
+        def __init__(self, country_id=13):
+            self.country_id = country_id
+
+    class _Lookup:
+        """Answers the two selects `_retail_price_for` makes, and keeps them.
+
+        Keeping them is the point. A stub that answers whatever it is asked
+        passes just as happily when the code asks the wrong question — the
+        first version of the prefix test below did exactly that, and went on
+        passing with the stripping removed. The statements are recorded so the
+        test can read the value that was actually bound.
+        """
+
+        def __init__(self, *answers):
+            self._answers = list(answers)
+            self.statements = []
+            self.seen = 0
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            value = self._answers[self.seen] if self.seen < len(self._answers) else None
+            self.seen += 1
+
+            class _R:
+                @staticmethod
+                def scalar_one_or_none():
+                    return value
+
+            return _R()
+
+        def bound(self, index=0):
+            return set(self.statements[index].compile().params.values())
+
+        async def get(self, _model, _pk):
+            return TestMatchingATopUpToThePlanItTopsUp._Plan()
+
+    async def test_the_prefix_is_stripped_to_find_the_retail_plan(self) -> None:
+        lookup = self._Lookup(Decimal("7.99"))
+
+        price = await topups._retail_price_for(lookup, _Esim(), "TOPUP_JC054", 5120, 30)
+
+        assert price == Decimal("7.99")
+        # The code we looked the plan up by, not the one the supplier sent.
+        # Without this the test passes with the stripping deleted.
+        assert "JC054" in lookup.bound()
+        assert "TOPUP_JC054" not in lookup.bound()
+        # Matched on the first query: the shape fallback was not needed.
+        assert lookup.seen == 1
+
+    async def test_a_code_with_no_prefix_is_looked_up_as_it_stands(self) -> None:
+        lookup = self._Lookup(Decimal("3.99"))
+
+        assert await topups._retail_price_for(lookup, _Esim(), "JC053", 3072, 15) == Decimal("3.99")
+        assert "JC053" in lookup.bound()
+
+    async def test_an_unmatched_code_falls_back_to_the_shape_on_that_destination(self) -> None:
+        lookup = self._Lookup(None, Decimal("4.99"))
+
+        price = await topups._retail_price_for(lookup, _Esim(), "TOPUP_WEIRD", 3072, 30)
+
+        assert price == Decimal("4.99")
+        assert lookup.seen == 2
+
+    async def test_nothing_matching_means_no_floor(self) -> None:
+        lookup = self._Lookup(None, None)
+
+        assert await topups._retail_price_for(lookup, _Esim(), "TOPUP_WEIRD", 99, 99) is None

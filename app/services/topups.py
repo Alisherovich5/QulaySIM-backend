@@ -14,6 +14,13 @@ priced — the cost only exists at the moment somebody asks. That is why pricing
 happens in this module, reading the same markup rules the admin manages, rather
 than hardcoding a second ladder that would drift from the first.
 
+Those rules are not the whole answer, though, and believing they were cost real
+money. The catalogue's retail prices are hand-set, not markup-derived, and they
+sit well above what the ladder produces — so a top-up priced purely off cost
+undercut the same plan bought new, and a customer could assemble a cheaper
+package out of a small plan plus a top-up. `_retail_price_for` is the floor
+that stops that, and the comment on it has the numbers.
+
 And a top-up creates no new eSIM row. Everything downstream that asks "was this
 order delivered?" by looking for an eSIM would therefore call every top-up
 undelivered forever, which is why the line carries `topup_applied_at` and why
@@ -31,7 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import ESIM, PricingRule
+from app.db.models import ESIM, Plan, PricingRule
 from app.services.currency import charm_uzs, usd_to_uzs
 
 logger = get_logger("topups")
@@ -48,6 +55,11 @@ PRICE_DIVISOR = Decimal("10000")
 #: Cap on what a single top-up may cost the customer, as a guard against a
 #: mispriced or misparsed package reaching the payment page.
 MAX_PRICE_USD = Decimal("500")
+
+#: The wholesaler names a top-up after the package it tops up: JC054 is China
+#: 5 GB / 30 days, TOPUP_JC054 is that much again on an eSIM that already has
+#: it. That is what lets a top-up be matched to the plan we sell normally.
+TOPUP_CODE_PREFIX = "TOPUP_"
 
 #: Wholesaler states in which more data can still be attached to the profile.
 #:
@@ -166,6 +178,71 @@ def _price(cost: Decimal, markup: Decimal, floor_usd: Decimal | None = None) -> 
     return price.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
+async def _retail_price_for(
+    session: AsyncSession, esim: ESIM, code: str, data_mb: int, days: int
+) -> Decimal | None:
+    """What this much data costs bought the ordinary way, if we sell it that way.
+
+    A top-up must never be cheaper than the same plan bought new. It was, by a
+    lot, and the arithmetic is the whole reason this function exists.
+
+    The markup ladder above prices a top-up off the wholesaler's cost: China
+    5 GB / 30 days costs us $2.96, the 5 GB rung is +35%, so the top-up quoted
+    $4.00. The retail price of the very same package is $7.99 — a number the
+    owner set by hand, not one the ladder produces. So a customer could buy the
+    1 GB plan for $2.20 and top it up with 5 GB for $4.00: 6 GB for $6.20,
+    against $7.99 for 5 GB bought normally. Two of those sold before anyone
+    noticed, at $3.99 of margin given away each time.
+
+    The module docstring says these are "the same markup rules" as the
+    catalogue. They are the same rules; the catalogue does not use them. Retail
+    prices are hand-set overrides, and no percentage of cost reproduces them.
+
+    Matched by the wholesaler's own code first — TOPUP_JC054 against JC054 —
+    and by shape on the same destination second, for a supplier that ever names
+    them differently. Cheapest match wins: the floor is what it would cost the
+    customer to simply buy it new, and if there are two ways to do that the
+    cheaper one is the one they would take.
+    """
+
+    base = code[len(TOPUP_CODE_PREFIX) :] if code.startswith(TOPUP_CODE_PREFIX) else code
+    by_code = (
+        await session.execute(
+            select(Plan.price_usd)
+            .where(
+                Plan.scope != "topup",
+                Plan.is_active.is_(True),
+                Plan.provider_package_code == base,
+            )
+            .order_by(Plan.price_usd.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if by_code is not None:
+        return Decimal(by_code)
+
+    original = await session.get(Plan, esim.plan_id)
+    country_id = original.country_id if original is not None else None
+    if country_id is None:
+        return None
+
+    by_shape = (
+        await session.execute(
+            select(Plan.price_usd)
+            .where(
+                Plan.scope != "topup",
+                Plan.is_active.is_(True),
+                Plan.country_id == country_id,
+                Plan.data_amount_mb == data_mb,
+                Plan.validity_days == days,
+            )
+            .order_by(Plan.price_usd.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return Decimal(by_shape) if by_shape is not None else None
+
+
 def _volume_mb(package: dict[str, Any]) -> int:
     """Bytes to megabytes, the way the rest of this integration reads volume."""
     raw = package.get("volume") or 0
@@ -217,6 +294,19 @@ async def available(session: AsyncSession, esim: ESIM) -> list[TopUp]:
             continue
         rule = await _rule_for(session, data_mb, days)
         price = _price(cost, _markup_of(rule, data_mb, days), _floor_of(rule))
+        # Never under the counter price. Dearer is allowed and sometimes right —
+        # a top-up is a convenience — but cheaper turns the catalogue into a
+        # price list somebody can arbitrage against us.
+        retail = await _retail_price_for(session, esim, code, data_mb, days)
+        if retail is not None and retail > price:
+            logger.info(
+                "topups.retail_price_applied",
+                code=code,
+                ladder=str(price),
+                retail=str(retail),
+                esim_id=esim.id,
+            )
+            price = retail
         # A top-up that would sell at or below cost is not offered at all. Same
         # rule as the catalogue: an order that loses money is worse than an
         # option the customer never saw.
