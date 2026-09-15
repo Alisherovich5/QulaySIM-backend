@@ -15,14 +15,14 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.db.models import ESIM, Country, Customer, Order, OrderItem, Plan
 from app.db.models.enums import ESIMStatus, OrderStatus
-from app.services.reporting import build_report, format_report
+from app.services.reporting import build_report, build_sale_note, format_report
 
 pytestmark = pytest.mark.anyio
 
@@ -66,6 +66,8 @@ def _seed_sale(
     complimentary: bool = False,
     data_total_mb: int = 3072,
     data_used_mb: int = 0,
+    topup_onto_esim: int | None = None,
+    topup_applied: bool = True,
 ) -> Order:
     country = Country(
         name=f"Testland {uuid.uuid4().hex[:6]}",
@@ -117,6 +119,10 @@ def _seed_sale(
             unit_price=Decimal(unit_price),
             unit_cost=Decimal(unit_cost),
             quantity=1,
+            # To'ldirish yangi eSIM yaratmaydi -- borining ustiga qo'shiladi,
+            # va qaysi biriga tushgani shu qatorda yoziladi.
+            esim_id=topup_onto_esim,
+            topup_applied_at=paid_at if (topup_onto_esim and topup_applied) else None,
         )
     )
     if with_esim:
@@ -504,3 +510,67 @@ async def test_a_shop_with_no_live_profiles_says_nothing_about_traffic() -> None
         # with the problems list.
         assert "TRAFIK" not in text
         session.rollback()
+
+
+async def test_an_applied_topup_is_not_called_undelivered() -> None:
+    """To'ldirish hech qachon yangi eSIM yaratmaydi.
+
+    "eSIM qatori yo'q" degan shart har bir to'ldirishni muvaffaqiyatsiz deb
+    e'lon qiladi, va birinchi sotilganidayoq shunday bo'ldi: mijozning hajmi
+    to'lovdan bir soniya keyin 5 GB dan 10 GB ga chiqqan, hisobot esa "eSIM
+    berilmadi" deb turgan. Qatorning o'z `topup_applied_at` i yetkazilganini
+    aytadi.
+    """
+
+    with worker_session() as session:
+        base = _seed_sale(session, paid_at=NOW - timedelta(hours=2))
+        esim_id = session.execute(select(ESIM.id).where(ESIM.order_id == base.id)).scalar_one()
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(hours=1),
+            with_esim=False,
+            topup_onto_esim=esim_id,
+        )
+
+        report = build_report(session, days=1, now=NOW)
+
+    assert report.unfulfilled_orders == []
+    assert "eSIM berilmadi" not in format_report(report)
+
+
+async def test_a_topup_that_never_landed_is_still_a_problem() -> None:
+    """Qo'llanmagan to'ldirish -- haqiqiy nosozlik, va u yashirilmasligi kerak."""
+
+    with worker_session() as session:
+        base = _seed_sale(session, paid_at=NOW - timedelta(hours=2))
+        esim_id = session.execute(select(ESIM.id).where(ESIM.order_id == base.id)).scalar_one()
+        stuck = _seed_sale(
+            session,
+            paid_at=NOW - timedelta(hours=1),
+            with_esim=False,
+            topup_onto_esim=esim_id,
+            topup_applied=False,
+        )
+
+        report = build_report(session, days=1, now=NOW)
+
+    assert report.unfulfilled_orders == [stuck.id]
+
+
+async def test_the_sale_note_says_which_esim_a_topup_landed_on() -> None:
+    with worker_session() as session:
+        base = _seed_sale(session, paid_at=NOW - timedelta(hours=2))
+        esim_id = session.execute(select(ESIM.id).where(ESIM.order_id == base.id)).scalar_one()
+        order = _seed_sale(
+            session,
+            paid_at=NOW - timedelta(hours=1),
+            with_esim=False,
+            topup_onto_esim=esim_id,
+        )
+
+        note = build_sale_note(session, order.id)
+
+    assert note is not None
+    assert "eSIM berilmadi" not in note
+    assert f"eSIM #{esim_id}" in note
+    assert "qo'shildi" in note

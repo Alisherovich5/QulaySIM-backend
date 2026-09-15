@@ -323,6 +323,20 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
     # A paid order with no eSIM is the failure that costs money and trust at the
     # same time: the customer was charged and got nothing. Listed by id, because
     # the owner's next step is to look one up.
+    #
+    # A top-up never creates an eSIM -- it adds data to one that already exists --
+    # so "has no eSIM row" calls every single top-up a failure. That fired on the
+    # first one sold: the customer's allowance had gone from 5 GB to 10 GB one
+    # second after payment, and the report still said nothing had been delivered.
+    # The line's own `topup_applied_at` is what says it landed.
+    delivered_topup = (
+        select(OrderItem.id)
+        .where(
+            OrderItem.order_id == Order.id,
+            OrderItem.topup_applied_at.is_not(None),
+        )
+        .exists()
+    )
     report.unfulfilled_orders = [
         row[0]
         for row in session.execute(
@@ -330,6 +344,7 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
             .where(
                 Order.id.in_(select(paid.c.id)),
                 ~select(ESIM.id).where(ESIM.order_id == Order.id).exists(),
+                ~delivered_topup,
             )
             .order_by(Order.id)
         ).all()
@@ -646,6 +661,14 @@ def build_sale_note(session: Session, order_id: int) -> str | None:
         )
     ).all()
 
+    # Top-up lines carry the eSIM they were added to rather than creating one.
+    topups = session.execute(
+        select(OrderItem.esim_id, OrderItem.topup_applied_at).where(
+            OrderItem.order_id == order_id,
+            OrderItem.esim_id.is_not(None),
+        )
+    ).all()
+
     customer_email = session.execute(
         select(Customer.email).where(Customer.id == order.customer_id)
     ).scalar_one_or_none()
@@ -677,6 +700,11 @@ def build_sale_note(session: Session, order_id: int) -> str | None:
         for provider, iccid, tran_no in esims:
             state = "tayyor" if tran_no else "⏳ ta'minotchidan kutilmoqda"
             lines.append(f"{provider} · ICCID {iccid} · {state}")
+    elif topups:
+        # Not a missing eSIM: a top-up goes onto one the customer already has.
+        for esim_id, applied_at in topups:
+            state = "qo'shildi" if applied_at else "⏳ qo'shilmoqda"
+            lines.append(f"eSIM #{esim_id} ga {state}")
     else:
         lines.append("❗ eSIM hali berilmadi")
 
