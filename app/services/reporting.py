@@ -207,11 +207,32 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
         )
     ).scalar_one()
 
-    report.total_data_mb = session.execute(
+    # Volume sold, in two halves, because a top-up creates no eSIM row.
+    #
+    # Summing ESIM.data_total_mb alone is the third place in this file to ask
+    # "is there an eSIM for this order?" and get the wrong answer for a top-up.
+    # The 15 September report said "Jami hajm: 3 GB" on a day that sold 13:
+    # a 3 GB plan, and two 5 GB top-ups that were invisible to this sum.
+    #
+    # The top-up half reads the plan's own size rather than the profile's, and
+    # deliberately so: ESIM.data_total_mb is the running total on a profile, so
+    # counting it again after a top-up would report the original purchase a
+    # second time in a later window.
+    esim_mb = session.execute(
         select(func.coalesce(func.sum(ESIM.data_total_mb), 0)).where(
             ESIM.order_id.in_(select(paid.c.id))
         )
     ).scalar_one()
+    topup_mb = session.execute(
+        select(func.coalesce(func.sum(Plan.data_amount_mb * OrderItem.quantity), 0))
+        .select_from(OrderItem)
+        .join(Plan, Plan.id == OrderItem.plan_id)
+        .where(
+            OrderItem.order_id.in_(select(paid.c.id)),
+            OrderItem.topup_applied_at.is_not(None),
+        )
+    ).scalar_one()
+    report.total_data_mb = int(esim_mb) + int(topup_mb)
 
     supplier_rows = session.execute(
         select(

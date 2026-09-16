@@ -12,14 +12,12 @@ arrived.
 
 from __future__ import annotations
 
-import asyncio
-
 import redis
 from celery import Task
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.integrations.telegram import send_html
+from app.integrations.telegram import send_html_blocking
 from app.services.reporting import (
     PERIOD_LABELS,
     build_report,
@@ -46,7 +44,7 @@ def send_period_report(self: Task, days: int) -> str:
 
     text = format_report(report)
     try:
-        asyncio.run(send_html(text))
+        send_html_blocking(text)
     except Exception as exc:
         logger.warning("reports.delivery_failed", days=days, error=str(exc))
         raise self.retry(exc=exc) from exc
@@ -87,6 +85,19 @@ def _claim_announcement(order_id: int) -> bool:
         return True
 
 
+def _release_announcement(order_id: int) -> None:
+    """Undo the claim, so a retry of a failed send can take it again.
+
+    A Redis outage here is not worth raising over: the claim expires on its own,
+    and the worst case is one sale announced twice.
+    """
+    try:
+        client = redis.from_url(str(settings.redis_url))
+        client.delete(f"qs:announced:order:{order_id}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reports.announce_release_failed", order_id=order_id, error=str(exc))
+
+
 @celery_app.task(name="reports.announce_sale", bind=True, max_retries=3, default_retry_delay=120)
 def announce_sale(self: Task, order_id: int) -> str:
     """Post a message the moment a sale completes.
@@ -108,8 +119,16 @@ def announce_sale(self: Task, order_id: int) -> str:
         return "skipped"
 
     try:
-        asyncio.run(send_html(note))
+        send_html_blocking(note)
     except Exception as exc:
+        # Give the claim back before retrying, or the retry is a guaranteed
+        # no-op: this task takes the claim first — it has to, so two workers
+        # racing on the same order cannot both send — and the retry would then
+        # find the claim already taken and return "duplicate" without sending
+        # anything. Order #129 was delivered in full and never announced for
+        # exactly this reason: the send failed at 05:42:55, the retry ran at
+        # 05:44:55, saw its own claim, and reported success.
+        _release_announcement(order_id)
         logger.warning("reports.announce_failed", order_id=order_id, error=str(exc))
         raise self.retry(exc=exc) from exc
 

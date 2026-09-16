@@ -128,9 +128,8 @@ def _alert(order_ids: list[int], overflow: int) -> None:
     customer already paid. A message that arrives tomorrow morning is a message
     that arrives after the refund request.
     """
-    import asyncio
 
-    from app.integrations.telegram import send_html
+    from app.integrations.telegram import send_html_blocking
 
     lines = ["<b>⚠️ To'landi, lekin eSIM yetkazilmadi</b>"]
     if order_ids:
@@ -142,7 +141,7 @@ def _alert(order_ids: list[int], overflow: int) -> None:
         lines.append(f"Yana {overflow} ta buyurtma navbatda — bu yugurishda tegilmadi.")
 
     try:
-        asyncio.run(send_html("\n".join(lines)))
+        send_html_blocking("\n".join(lines))
     except Exception:
         # An alert that fails must not fail the rescue: the re-dispatch above is
         # the part that actually helps the customer.

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
+
+import httpx
 
 from app.core.config import settings
 from app.core.errors import ServiceUnavailableError, UpstreamError
@@ -33,6 +36,28 @@ def env_chat_ids() -> list[str]:
     return [part for part in raw.split() if part]
 
 
+async def _recipients_from(session: object) -> list[str] | None:
+    """The active chat ids on one session, or None if they cannot be read."""
+    from sqlalchemy import select
+
+    from app.db.models import TelegramRecipient
+
+    try:
+        rows = (
+            (
+                await session.execute(  # type: ignore[attr-defined]
+                    select(TelegramRecipient.chat_id).where(TelegramRecipient.is_active.is_(True))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    except Exception as exc:  # noqa: BLE001 - falls back rather than failing
+        logger.warning("telegram.recipients_unreadable", error=str(exc))
+        return None
+    return [str(r) for r in rows] or None
+
+
 async def chat_ids() -> list[str]:
     """Every chat a message should reach.
 
@@ -45,33 +70,24 @@ async def chat_ids() -> list[str]:
     writes to a slightly stale list, and the database being down is precisely the
     moment somebody should be told something.
     """
-    from sqlalchemy import select
-
-    from app.db.models import TelegramRecipient
     from app.db.session import session_scope
 
     try:
         async with session_scope() as session:
-            rows = (
-                (
-                    await session.execute(
-                        select(TelegramRecipient.chat_id).where(
-                            TelegramRecipient.is_active.is_(True)
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        if rows:
-            return [str(r) for r in rows]
-    except Exception as exc:  # noqa: BLE001 - falls back rather than failing
+            found = await _recipients_from(session)
+    except Exception as exc:  # noqa: BLE001
         logger.warning("telegram.recipients_unreadable", error=str(exc))
+        found = None
+    return found or env_chat_ids()
 
-    return env_chat_ids()
 
-
-async def send_html(text: str, *, chat_id: str | None = None) -> None:
+async def send_html(
+    text: str,
+    *,
+    chat_id: str | None = None,
+    targets: list[str] | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> None:
     """Post pre-formatted HTML to the operations chat.
 
     Separate from `send_support_message` because the caller here has already
@@ -82,7 +98,10 @@ async def send_html(text: str, *, chat_id: str | None = None) -> None:
     report that failed to send should fail visibly in the worker log rather than
     look delivered.
     """
-    targets = [chat_id] if chat_id else await chat_ids()
+    if chat_id:
+        targets = [chat_id]
+    elif targets is None:
+        targets = await chat_ids()
     if not settings.telegram_bot_token or not targets:
         raise ServiceUnavailableError("Telegram is not configured")
 
@@ -93,7 +112,7 @@ async def send_html(text: str, *, chat_id: str | None = None) -> None:
     last_error: Exception | None = None
     for target in targets:
         try:
-            response = await get_client().post(
+            response = await (client or get_client()).post(
                 url,
                 json={
                     "chat_id": target,
@@ -113,6 +132,44 @@ async def send_html(text: str, *, chat_id: str | None = None) -> None:
 
     if delivered == 0:
         raise UpstreamError("Telegram delivery failed") from last_error
+
+
+def send_html_blocking(text: str) -> None:
+    """`send_html`, for a Celery task — which has no event loop of its own.
+
+    `asyncio.run()` opens a NEW loop on every call, and both of the things
+    `send_html` reaches for are process-global and bound to whichever loop
+    created them: the SQLAlchemy engine behind the recipient list, and the
+    shared httpx client. So the second call in a worker process fails with
+    "got Future … attached to a different loop", then "Event loop is closed" —
+    which is exactly what swallowed the sale announcement for order #129 while
+    the customer's two eSIMs were delivered normally.
+
+    This owns the loop, and gives that loop its own engine and its own client,
+    both disposed of when it returns. Same reasoning as `task_sessions()`,
+    applied to the other half of the problem.
+    """
+
+    asyncio.run(_send_html_standalone(text))
+
+
+async def _send_html_standalone(text: str) -> None:
+    from app.db.session import task_sessions
+
+    targets: list[str] | None = None
+    try:
+        async with task_sessions() as factory, factory() as session:
+            targets = await _recipients_from(session)
+    except Exception as exc:  # noqa: BLE001 - the env list is the fallback
+        logger.warning("telegram.recipients_unreadable", error=str(exc))
+    targets = targets or env_chat_ids()
+
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(10.0, connect=5.0),
+        headers={"User-Agent": "QulaySIM/2.0"},
+        follow_redirects=True,
+    ) as client:
+        await send_html(text, targets=targets, client=client)
 
 
 async def send_support_message(

@@ -574,3 +574,48 @@ async def test_the_sale_note_says_which_esim_a_topup_landed_on() -> None:
     assert "eSIM berilmadi" not in note
     assert f"eSIM #{esim_id}" in note
     assert "qo'shildi" in note
+
+
+async def test_a_topup_counts_towards_the_volume_sold() -> None:
+    """15-sentabr hisobotida "Jami hajm: 3 GB" deb chiqqan kun.
+
+    O'sha kuni 3 GB lik bitta tarif va 5 GB dan ikkita to'ldirish sotilgan --
+    13 GB. Hajm faqat eSIM qatorlaridan yig'ilardi, to'ldirish esa eSIM
+    yaratmaydi, ya'ni 10 GB ko'rinmay ketgan. Bu -- shu fayldagi "eSIM qatori
+    bormi?" degan uchinchi savol.
+    """
+
+    with worker_session() as session:
+        base = _seed_sale(session, paid_at=NOW - timedelta(hours=3))
+        esim_id = session.execute(select(ESIM.id).where(ESIM.order_id == base.id)).scalar_one()
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(hours=1),
+            with_esim=False,
+            topup_onto_esim=esim_id,
+        )
+
+        report = build_report(session, days=1, now=NOW)
+
+    # 3 GB tarif + 3 GB to'ldirish (seed'dagi reja o'lchami)
+    assert report.total_data_mb == 6144
+    assert "Jami hajm: <b>6 GB</b>" in format_report(report)
+
+
+async def test_a_topup_that_never_landed_adds_no_volume() -> None:
+    """To'lov o'tgan, lekin ta'minotchi hajmni ulamagan -- sotilgan hajm emas."""
+
+    with worker_session() as session:
+        base = _seed_sale(session, paid_at=NOW - timedelta(hours=3))
+        esim_id = session.execute(select(ESIM.id).where(ESIM.order_id == base.id)).scalar_one()
+        _seed_sale(
+            session,
+            paid_at=NOW - timedelta(hours=1),
+            with_esim=False,
+            topup_onto_esim=esim_id,
+            topup_applied=False,
+        )
+
+        report = build_report(session, days=1, now=NOW)
+
+    assert report.total_data_mb == 3072
