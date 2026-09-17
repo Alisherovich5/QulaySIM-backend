@@ -14,6 +14,7 @@ appears anywhere a customer browses.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -27,6 +28,12 @@ from app.services import topups as topup_service
 from app.services.orders import MIN_CHARGEABLE_UZS, _freeze_som_amount, _payment_url_for_lines
 
 logger = get_logger("topup_orders")
+
+#: How long an unpaid top-up stays the same order rather than becoming a second
+#: one. A customer who taps twice, or a client that retries a request it never
+#: saw the answer to, means one intent — not two. Fifteen minutes is longer than
+#: any payment page stays open and shorter than a price is worth freezing.
+REUSE_WINDOW = timedelta(minutes=15)
 
 
 async def owned_esim(session: AsyncSession, customer: Customer, esim_id: int) -> ESIM:
@@ -102,8 +109,26 @@ async def place(
     esim_id: int,
     package_code: str,
 ) -> dict[str, object]:
-    """Create a pending top-up order and return the link that pays for it."""
+    """Create a pending top-up order and return the link that pays for it.
+
+    Placing the same top-up twice returns the first order rather than a second
+    one. The cart endpoint has taken an `Idempotency-Key` since it was written;
+    this one never did, and the database shows the cost: eSIM 69 collected three
+    orders in 104 seconds (two of them abandoned), and of 93 orders on the live
+    database 53 sit unpaid. A second pending order for the same profile and the
+    same package is not a second purchase, it is the same tap arriving twice.
+    """
     esim = await owned_esim(session, customer, esim_id)
+
+    existing = await _reusable_order(session, customer, esim_id, package_code)
+    if existing is not None:
+        logger.info(
+            "topup.reused",
+            order_id=existing["order_id"],
+            esim_id=esim_id,
+            package_code=package_code,
+        )
+        return existing
 
     # Our own `status` column says "expired" both when the allowance is spent and
     # when the validity has elapsed. Only the second one makes a top-up
@@ -171,5 +196,58 @@ async def place(
             order.id,
             amount_uzs,
             [(plan.title, option.price_usd, 1)],
+        ),
+    }
+
+
+async def _reusable_order(
+    session: AsyncSession,
+    customer: Customer,
+    esim_id: int,
+    package_code: str,
+) -> dict[str, object] | None:
+    """The customer's own unpaid order for this exact top-up, if it is still fresh.
+
+    Matched on the package code carried by the line's plan rather than on the plan
+    id: `_plan_for` creates a row per (esim, package), so the id is stable, but the
+    code is what the customer actually asked for and what fulfilment orders
+    against.
+    """
+    from app.db.base import utcnow
+
+    row = (
+        await session.execute(
+            select(Order, Plan)
+            .join(OrderItem, OrderItem.order_id == Order.id)
+            .join(Plan, Plan.id == OrderItem.plan_id)
+            .where(
+                Order.customer_id == customer.id,
+                Order.status == OrderStatus.PENDING,
+                OrderItem.esim_id == esim_id,
+                Plan.provider_package_code == package_code,
+                Order.created_at >= utcnow() - REUSE_WINDOW,
+            )
+            .order_by(Order.id.desc())
+            .limit(1)
+        )
+    ).first()
+    if row is None:
+        return None
+
+    order, plan = row
+    if order.amount_uzs is None or order.exchange_rate is None:
+        # An order that never got a som amount cannot be paid for, so it is not
+        # something to hand back — let the caller place a fresh one.
+        return None
+
+    return {
+        "order_id": order.id,
+        "total_usd": order.total,
+        "amount_uzs": order.amount_uzs,
+        "exchange_rate": order.exchange_rate,
+        "payment_url": await _payment_url_for_lines(
+            order.id,
+            order.amount_uzs,
+            [(plan.title, order.total, 1)],
         ),
     }
