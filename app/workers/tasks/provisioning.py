@@ -196,10 +196,12 @@ def grant_referral_reward(customer_id: int) -> str | None:
         if customer is None or not customer.referred_by_id:
             return None
 
+        # One paid order is the whole condition: the reward is for the invitee
+        # having bought at all. `limit(1)` because the id is never used.
         paid = session.scalar(
             select(Order.id)
             .where(Order.customer_id == customer_id, Order.status == "paid")
-            .limit(2)
+            .limit(1)
         )
         if paid is None:
             return None
