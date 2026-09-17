@@ -115,7 +115,13 @@ def create_app() -> FastAPI:
         allow_origin_regex=origin_regex,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        # `Idempotency-Key` is what stops one cart becoming two paid orders, and
+        # a header missing from this list is refused at the preflight — so the
+        # guard would vanish silently the first time the storefront is served
+        # from anywhere but the API's own origin. Today it is same-origin behind
+        # nginx and no preflight happens at all; that is a deployment detail,
+        # not something checkout should depend on.
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID", "Idempotency-Key"],
         expose_headers=["X-Request-ID"],
         max_age=600,
     )

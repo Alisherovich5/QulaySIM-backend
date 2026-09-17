@@ -24,10 +24,10 @@ from app.core.cache import get_redis
 from app.core.config import settings
 from app.core.errors import ConflictError, DomainError, ServiceUnavailableError
 from app.core.logging import get_logger
-from app.db.models import Customer, Order, OrderItem, PromoCode
+from app.db.models import Customer, Order, OrderItem, PaymeTransaction, PromoCode
 from app.db.models.enums import OrderStatus
 from app.domain.pricing import Quote
-from app.integrations.payme import checkout_url
+from app.integrations.payme import STATE_CREATED, checkout_url
 from app.schemas.commerce import CartItemIn
 from app.services.checkout import price_cart
 from app.services.currency import charm_uzs, usd_to_uzs
@@ -74,14 +74,41 @@ def _idempotency_key(customer_id: int, key: str) -> str:
     return f"qs:idem:{customer_id}:{digest}"
 
 
-async def _replay(cache_key: str) -> dict[str, object] | None:
-    """The answer a previous identical request already got, if there was one."""
+async def _replay(session: AsyncSession, cache_key: str) -> dict[str, object] | None:
+    """The answer a previous identical request already got — if it still answers.
+
+    A cached reply is a link to one specific order, and that link stops being an
+    answer the moment the order can no longer take money. Replaying it then is
+    worse than not replaying at all, because of where the key comes from: the
+    storefront derives it from the cart, so the *same cart bought again* asks
+    the same question. A customer buying a second identical eSIM for a travelling
+    companion would be handed the link to the one they already paid for, their
+    cart would be cleared as "settled", and nothing would be bought — silently,
+    which is the part that makes it expensive.
+
+    So the order is re-read and only a pending one is replayed. Anything else —
+    paid, cancelled, or deleted — falls through to placing a fresh order, which
+    then overwrites this key. That is also the escape hatch for a pending order
+    whose provider invoice has gone stale: cancel it (the storefront offers
+    that) and the next attempt is a new order rather than the same dead link.
+    """
     stored = await get_redis().get(cache_key)
     if not stored:
         return None
     try:
         payload = json.loads(stored)
     except ValueError:
+        return None
+    order_id = payload.get("order_id")
+    if not isinstance(order_id, int):
+        return None
+    order = await session.get(Order, order_id)
+    if order is None or order.status != OrderStatus.PENDING:
+        logger.info(
+            "orders.idempotent_replay_stale",
+            order_id=order_id,
+            status=order.status if order is not None else "missing",
+        )
         return None
     # Decimals went out as strings and must come back as Decimals, or the
     # response model rejects them.
@@ -115,7 +142,7 @@ async def place_order(
 
     cache_key = _idempotency_key(customer.id, idempotency_key) if idempotency_key else None
     if cache_key:
-        replayed = await _replay(cache_key)
+        replayed = await _replay(session, cache_key)
         if replayed is not None:
             logger.info(
                 "orders.idempotent_replay",
@@ -283,6 +310,26 @@ async def cancel_unpaid_order(session: AsyncSession, customer: Customer, order_i
         raise DomainError("Order not found", code="not_found")
     if order.status != OrderStatus.PENDING:
         raise ConflictError("Only a pending order can be cancelled")
+
+    # A Payme transaction that has been created but not yet performed is holding
+    # the customer's money. Cancelling the order underneath it makes the eventual
+    # PerformTransaction fail against an order that is no longer payable — the one
+    # state where somebody has been debited and there is nothing to deliver.
+    #
+    # ATMOS has no equivalent hazard: it asks before it debits, so a callback that
+    # arrives after a cancellation is refused and no money moves. The guard is
+    # written for whichever provider is live, not for the one that is live today.
+    in_flight = (
+        await session.execute(
+            select(PaymeTransaction.id).where(
+                PaymeTransaction.order_id == order.id,
+                PaymeTransaction.state == STATE_CREATED,
+            )
+        )
+    ).first()
+    if in_flight is not None:
+        logger.info("orders.cancel_refused_payment_in_flight", order_id=order_id)
+        raise ConflictError("A payment is in progress for this order")
 
     order.status = OrderStatus.CANCELLED
     await session.commit()
