@@ -119,7 +119,15 @@ class EsimAccessClient:
 
         if not result.get("success"):
             code = result.get("errorCode", "unknown")
-            message = result.get("errorMessage", "Unknown eSIM Access error")
+            # The wholesaler does not always send a message with its code, and
+            # the fallback string on its own is a dead end: order #132 retried
+            # twelve times against code 200007 and every log line said "Unknown
+            # eSIM Access error", so nobody could tell a refusal from an outage.
+            # The rest of the body is what names it, so it travels with the code.
+            message = result.get("errorMessage") or result.get("errorMsg") or ""
+            if not message:
+                rest = {k: v for k, v in result.items() if k not in {"success", "errorCode"}}
+                message = f"no message; body={json.dumps(rest, ensure_ascii=False)[:300]}"
             raise EsimAccessError(f"eSIM Access {code}: {message}")
         return result
 
