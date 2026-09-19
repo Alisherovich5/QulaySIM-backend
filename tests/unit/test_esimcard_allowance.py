@@ -101,9 +101,7 @@ def _written(monkeypatch, status: str) -> dict:
 
     monkeypatch.setattr(esimcard_sync, "ESIM", _ESIM)
     monkeypatch.setattr(esimcard_sync, "render_qr_data_url", lambda payload: "data:,")
-    monkeypatch.setattr(
-        esimcard_sync.ledger, "purchases_for", lambda db, oid, provider: [_Row()]
-    )
+    monkeypatch.setattr(esimcard_sync.ledger, "purchases_for", lambda db, oid, provider: [_Row()])
     monkeypatch.setattr(esimcard_sync.ledger, "DONE", "done", raising=False)
     monkeypatch.setattr(esimcard_sync.ledger, "CLAIMED", "claimed", raising=False)
 

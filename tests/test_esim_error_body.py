@@ -4,9 +4,15 @@ from app.integrations.esim_access import EsimAccessClient, EsimAccessError
 
 
 class _Resp:
-    def __init__(self, payload): self._p = payload
-    def raise_for_status(self): pass
-    def json(self): return self._p
+    def __init__(self, payload):
+        self._p = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._p
+
 
 def _run(monkeypatch, payload):
     # CI da ESIMACCESS_ACCESS_CODE yo'q, shuning uchun klient tarmoqqa
@@ -22,11 +28,13 @@ def _run(monkeypatch, payload):
         c._post("/x")
     return str(e.value)
 
+
 def test_xabarsiz_kod_tanani_olib_keladi(monkeypatch):
     msg = _run(monkeypatch, {"success": False, "errorCode": "200007", "obj": {"iccid": "893"}})
     assert "200007" in msg
-    assert "893" in msg, msg          # tana xabarga tushdi
+    assert "893" in msg, msg  # tana xabarga tushdi
     assert "Unknown" not in msg
+
 
 def test_xabar_bor_bolsa_osha_ishlatiladi(monkeypatch):
     msg = _run(

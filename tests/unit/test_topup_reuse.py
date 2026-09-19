@@ -104,9 +104,9 @@ async def test_qidiruv_aynan_shu_esim_paket_va_pending_boyicha(monkeypatch):
     compiled = session.statements[0].compile()
     params = compiled.params
     values = {str(v) for v in params.values()}
-    assert "75" in values, params           # aynan shu eSIM
+    assert "75" in values, params  # aynan shu eSIM
     assert "TOPUP_JC013" in values, params  # aynan shu paket
-    assert "98" in values, params           # aynan shu mijoz
+    assert "98" in values, params  # aynan shu mijoz
     assert any("pending" in str(v).lower() for v in params.values()), params
     # oyna: 15 daqiqadan eskisi olinmasin
     stamps = [v for v in params.values() if isinstance(v, datetime)]
