@@ -9,7 +9,7 @@ place that knows it: the plan.
 
 from __future__ import annotations
 
-import pytest
+from typing import ClassVar
 
 from app.integrations import esimcard_sync
 
@@ -19,7 +19,7 @@ class _Plan:
     data_amount_mb = 20480
     validity_days = 30
     provider_package_code = "pkg"
-    offers: list = []
+    offers: ClassVar[list] = []
 
 
 class _Item:
@@ -40,7 +40,7 @@ class _Order:
     customer_id = 5
     provider = "esimcard"
     provider_status = ""
-    items = [_Item()]
+    items: ClassVar[list] = [_Item()]
 
 
 class _Remote:
