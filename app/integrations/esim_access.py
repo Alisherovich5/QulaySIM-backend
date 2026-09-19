@@ -258,10 +258,33 @@ def _local_status(provider_status: str) -> str:
 
 
 def _plan_by_package_code(order: Order) -> dict[str, Plan]:
+    """Which plan each eSIM Access package code belongs to, for this order.
+
+    Built from the plan's eSIM Access *offer*, not from the plan's own
+    `provider_package_code`. Those agree only while the plan's primary supplier
+    is eSIM Access — and the router buys from whoever is cheaper, falling back
+    to eSIM Access whenever the other one refuses. That is exactly when this
+    map is needed and exactly when reading the plan's own field returns
+    nothing.
+
+    Measured on order 145: the plan's primary supplier is eSIMCard, whose
+    wallet was empty, so the purchase went to eSIM Access and came back as
+    package JC088 — a real, paid-for 20 GB Vietnam profile. The map was empty,
+    every profile failed its plan lookup, and the customer's eSIM was never
+    written. We owned it at the supplier and showed nothing.
+    """
     result: dict[str, Plan] = {}
     for item in order.items:
-        if item.plan.provider == "esimaccess" and item.plan.provider_package_code:
-            result[item.plan.provider_package_code] = item.plan
+        plan = item.plan
+        if plan is None:
+            continue
+        for offer in plan.offers:
+            if offer.provider == "esimaccess" and offer.package_code:
+                result[offer.package_code] = plan
+        # Kept for a plan whose own supplier is eSIM Access and which has no
+        # offer row yet; the offer wins where both exist.
+        if plan.provider == "esimaccess" and plan.provider_package_code:
+            result.setdefault(plan.provider_package_code, plan)
     return result
 
 
