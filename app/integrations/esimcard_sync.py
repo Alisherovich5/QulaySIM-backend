@@ -19,7 +19,6 @@ do not care which wholesaler served the order.
 from __future__ import annotations
 
 from datetime import timedelta
-
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
