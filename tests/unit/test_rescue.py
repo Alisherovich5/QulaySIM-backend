@@ -128,3 +128,110 @@ class TestItCannotMakeThingsWorse:
         naive = datetime.now(UTC).replace(tzinfo=None) - timedelta(minutes=30)
         result = _run(monkeypatch, [(7, naive, naive)])
         assert result["redispatched"] == 1
+
+
+class _FakeRedis:
+    """A Redis that remembers keys, or refuses to work at all."""
+
+    def __init__(self, *, broken: bool = False) -> None:
+        self.broken = broken
+        self.keys: dict[str, int | None] = {}
+
+    def set(self, key: str, value: bytes, ex: int | None = None, nx: bool = False):
+        if self.broken:
+            raise RuntimeError("redis is down")
+        if nx and key in self.keys:
+            return None
+        self.keys[key] = ex
+        return True
+
+
+@pytest.fixture
+def alerting(monkeypatch):
+    """Let `_alert` run for real, but against a fake Redis and no Telegram."""
+    import redis
+
+    import app.integrations.telegram as telegram
+
+    fake = _FakeRedis()
+    sent: list[str] = []
+    monkeypatch.setattr(redis.Redis, "from_url", lambda url: fake)
+    monkeypatch.setattr(telegram, "send_html_blocking", lambda text: sent.append(text))
+    monkeypatch.setattr(rescue, "_failure_note", lambda ids: {})
+    return {"redis": fake, "sent": sent}
+
+
+class TestItDoesNotRepeatItself:
+    """The rescue runs every five minutes. An order that stays stuck must not
+    send the same message twelve times an hour — that is how an alert stops
+    being read, and the one alert worth reading is this one."""
+
+    def test_the_first_time_an_order_is_stuck_it_is_announced(self, alerting) -> None:
+        rescue._alert([141], 0)
+        assert len(alerting["sent"]) == 1
+        assert "#141" in alerting["sent"][0]
+
+    def test_the_second_run_says_nothing(self, alerting) -> None:
+        rescue._alert([141], 0)
+        rescue._alert([141], 0)
+        assert len(alerting["sent"]) == 1
+
+    def test_a_different_order_still_gets_through(self, alerting) -> None:
+        """Silence is per order, not a mute on the whole alert."""
+        rescue._alert([141], 0)
+        rescue._alert([142], 0)
+        assert len(alerting["sent"]) == 2
+        assert "#142" in alerting["sent"][1]
+
+    def test_the_silence_expires(self, alerting) -> None:
+        """A day, not forever: somebody has paid and has nothing, so an order
+        nobody fixes should keep asking once a day rather than stop asking."""
+        rescue._alert([141], 0)
+        assert alerting["redis"].keys["rescue:alerted:141"] == rescue.ALERT_SILENCE
+        assert rescue.ALERT_SILENCE >= 60 * 60
+
+    def test_nothing_fresh_means_no_message_at_all(self, alerting) -> None:
+        """Not an empty bulletin — no bulletin."""
+        rescue._alert([141], 0)
+        alerting["sent"].clear()
+        rescue._alert([141], 0)
+        assert alerting["sent"] == []
+
+    def test_a_broken_redis_alerts_rather_than_swallows(self, monkeypatch, alerting) -> None:
+        """A duplicate message is a smaller failure than a silent one."""
+        import redis
+
+        monkeypatch.setattr(redis.Redis, "from_url", lambda url: _FakeRedis(broken=True))
+        rescue._alert([141], 0)
+        rescue._alert([141], 0)
+        assert len(alerting["sent"]) == 2
+
+
+class TestItSaysWhyItFailed:
+    """ "Check the supplier" is the one thing the reader cannot do from their
+    phone. The supplier already told us; the message should repeat it."""
+
+    def test_the_supplier_reason_is_in_the_message(self, monkeypatch, alerting) -> None:
+        monkeypatch.setattr(
+            rescue, "_failure_note", lambda ids: {141: "Insufficient Wallet Balance"}
+        )
+        rescue._alert([141], 0)
+        assert "Insufficient Wallet Balance" in alerting["sent"][0]
+
+    def test_an_order_with_no_reason_is_still_announced(self, alerting) -> None:
+        rescue._alert([141], 0)
+        assert "#141" in alerting["sent"][0]
+
+    def test_only_the_latest_attempt_is_quoted(self, monkeypatch) -> None:
+        """One line per order: the newest row wins, older failures do not
+        stack up into a wall of text nobody reads."""
+        rows = [(141, "newest reason"), (141, "older reason")]
+        monkeypatch.setattr(rescue, "worker_session", lambda: _Session(rows))
+        assert rescue._failure_note([141]) == {141: "newest reason"}
+
+    def test_no_orders_means_no_query(self, monkeypatch) -> None:
+        def _explode():
+            raise AssertionError("the database must not be touched for an empty list")
+
+        monkeypatch.setattr(rescue, "worker_session", _explode)
+        assert rescue._failure_note([]) == {}

@@ -121,22 +121,92 @@ def rescue_unfulfilled_orders() -> dict[str, int]:
     return {"redispatched": len(redispatched), "alarming": len(alarming), "skipped": overflow}
 
 
+#: How long one order stays quiet after it has been reported. The rescue runs
+#: every five minutes, so without this a single stuck order sends the same
+#: message twelve times an hour — which is how an alert stops being read. A day
+#: is the floor rather than silence: somebody has paid and has nothing, and an
+#: order that nobody fixes should keep asking once, not stop asking.
+ALERT_SILENCE = 24 * 60 * 60
+
+
+def _first_alert(order_ids: list[int]) -> list[int]:
+    """The ones not reported recently, marked as reported on the way out.
+
+    Redis rather than a column: the marker is about the message, not about the
+    order, and it should disappear on its own. A failure to reach Redis reports
+    everything, because a duplicate alert is a smaller problem than a silent
+    one.
+    """
+    import redis
+
+    from app.core.config import settings
+
+    try:
+        client = redis.Redis.from_url(str(settings.redis_url))
+        fresh = []
+        for oid in order_ids:
+            if client.set(f"rescue:alerted:{oid}", b"1", ex=ALERT_SILENCE, nx=True):
+                fresh.append(oid)
+        return fresh
+    except Exception:  # noqa: BLE001 - any Redis failure must fall back to alerting
+        logger.warning("rescue.alert_dedupe_unavailable")
+        return order_ids
+
+
+def _failure_note(order_ids: list[int]) -> dict[int, str]:
+    """The supplier's own words for why each one failed, where there are any.
+
+    "Check the supplier" is what the message used to say, and it is the one
+    thing the reader cannot do from their phone. The ledger already holds the
+    reason — an empty wallet reads as an empty wallet — so it goes in the
+    message and the owner knows whether to top up or to wait.
+    """
+    from app.db.models import SupplierPurchase
+
+    if not order_ids:
+        return {}
+    notes: dict[int, str] = {}
+    with worker_session() as session:
+        rows = session.execute(
+            select(SupplierPurchase.order_id, SupplierPurchase.note)
+            .where(SupplierPurchase.order_id.in_(order_ids), SupplierPurchase.note != "")
+            .order_by(SupplierPurchase.id.desc())
+        ).all()
+    for order_id, note in rows:
+        if note:
+            notes.setdefault(order_id, note.strip()[:120])
+    return notes
+
+
 def _alert(order_ids: list[int], overflow: int) -> None:
-    """Tell the owner, now.
+    """Tell the owner, once.
 
     Deliberately not a daily summary: this is the one failure mode where the
     customer already paid. A message that arrives tomorrow morning is a message
-    that arrives after the refund request.
+    that arrives after the refund request. Equally deliberately not every five
+    minutes for the same order — an alert repeated until it is background noise
+    protects nobody.
     """
 
     from app.integrations.telegram import send_html_blocking
 
+    fresh = _first_alert(order_ids)
+    if not fresh and not overflow:
+        return
+
+    notes = _failure_note(fresh)
     lines = ["<b>⚠️ To'landi, lekin eSIM yetkazilmadi</b>"]
-    if order_ids:
-        listed = ", ".join(f"#{oid}" for oid in order_ids[:10])
-        more = f" va yana {len(order_ids) - 10} ta" if len(order_ids) > 10 else ""
+    if fresh:
+        listed = ", ".join(f"#{oid}" for oid in fresh[:10])
+        more = f" va yana {len(fresh) - 10} ta" if len(fresh) > 10 else ""
         lines.append(f"20 daqiqadan oshgan buyurtmalar: {listed}{more}")
-        lines.append("Qayta yuborildi. Agar keyingi tekshiruvda ham chiqsa — ta'minotchida muammo.")
+        for oid in fresh[:10]:
+            if oid in notes:
+                lines.append(f"#{oid} — ta'minotchi: <i>{notes[oid]}</i>")
+        lines.append(
+            "Qayta yuborish har 5 daqiqada davom etadi — sabab bartaraf bo'lsa, o'zi yetkaziladi."
+        )
+        lines.append("Keyingi eslatma 24 soatdan keyin.")
     if overflow:
         lines.append(f"Yana {overflow} ta buyurtma navbatda — bu yugurishda tegilmadi.")
 
