@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from hashlib import sha1
 from typing import Any
 
 from fastapi import FastAPI
@@ -172,6 +173,18 @@ SITEMAP_STATIC_PATHS = (
     ("/maxfiylik", "0.3", "yearly"),
 )
 
+
+def _fingerprint_static_paths() -> str:
+    """A short digest of the page list, and nothing else."""
+    return sha1(
+        "|".join(path for path, _, _ in SITEMAP_STATIC_PATHS).encode(), usedforsecurity=False
+    ).hexdigest()[:8]
+
+
+#: Changes when the tuple above changes, and nothing else does.
+_STATIC_PATHS_FINGERPRINT = _fingerprint_static_paths()
+
+
 # Uzbek is served from the root; the other two live under a path prefix.
 # This must agree with src/lib/seo.ts on the front end — the sitemap and the
 # hreflang tags on the pages themselves have to describe the same set of
@@ -230,7 +243,10 @@ def _register_sitemap(app: FastAPI) -> None:
     """
     from fastapi import Response
 
-    from app.core.cache import cache_key, get_or_set
+    # Imported through the module rather than by name: bound by name here, the
+    # cache call is invisible to a test, and the one thing worth testing about
+    # this route is which key it caches under.
+    from app.core import cache
     from app.db.session import SessionFactory
 
     @app.get("/sitemap.xml", include_in_schema=False)
@@ -299,7 +315,13 @@ def _register_sitemap(app: FastAPI) -> None:
             lines.append("</urlset>")
             return "\n".join(lines)
 
-        body = await get_or_set(cache_key("sitemap"), 86400, produce)
+        # The key carries a fingerprint of the static list, so a deploy that
+        # adds a page invalidates the cached sitemap by itself. Without it the
+        # three pages added above would have stayed invisible for a day after
+        # the release that introduced them — which is exactly what happened,
+        # and which is only noticeable if somebody goes looking.
+        key = cache.cache_key(f"sitemap:{_STATIC_PATHS_FINGERPRINT}")
+        body = await cache.get_or_set(key, 86400, produce)
         return Response(content=body, media_type="application/xml")
 
 

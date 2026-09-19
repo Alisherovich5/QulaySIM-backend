@@ -784,3 +784,50 @@ class TestCoverageReachesTheStorefront:
                 restore.coverage_iso2 = original
                 await session.commit()
             await invalidate_catalog()
+
+
+class TestSitemapCacheInvalidation:
+    """A page added to the sitemap has to appear in it.
+
+    It did not: the sitemap is cached for a day under a fixed key, so the three
+    pages added to the static list stayed invisible until the key expired —
+    silently, on a release whose whole point was that they become visible.
+    """
+
+    def test_the_cache_key_changes_when_the_page_list_does(self) -> None:
+        from app import main
+
+        before = main._STATIC_PATHS_FINGERPRINT
+        original = main.SITEMAP_STATIC_PATHS
+        try:
+            main.SITEMAP_STATIC_PATHS = (*original, ("/yangi-sahifa", "0.5", "monthly"))
+            after = main._fingerprint_static_paths()
+        finally:
+            main.SITEMAP_STATIC_PATHS = original
+        assert after != before
+
+    async def test_the_sitemap_is_actually_cached_under_that_key(
+        self, client: AsyncClient, monkeypatch
+    ) -> None:
+        """The fingerprint is only worth computing if the cache key uses it."""
+        from app import main
+        from app.core import cache
+
+        seen: list[str] = []
+
+        async def _spy(key, ttl, produce):
+            seen.append(key)
+            return await produce()
+
+        # Patched on the module it is imported from: the route imports it
+        # inside the handler, so there is nothing to patch on app.main.
+        monkeypatch.setattr(cache, "get_or_set", _spy)
+        await client.get("/sitemap.xml")
+        assert seen, "the sitemap did not go through the cache at all"
+        assert main._STATIC_PATHS_FINGERPRINT in seen[0], seen[0]
+
+    def test_the_same_list_keeps_the_same_key(self) -> None:
+        """Otherwise every restart would rebuild the sitemap from the database."""
+        from app import main
+
+        assert main._fingerprint_static_paths() == main._STATIC_PATHS_FINGERPRINT
