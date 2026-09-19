@@ -18,12 +18,15 @@ do not care which wholesaler served the order.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.logging import get_logger
+from app.db.base import utcnow
 from app.db.models import ESIM, Order, OrderItem
 from app.integrations.esimcard import EsimCardClient, RemoteEsim
 from app.integrations.qr import render_qr_data_url
@@ -158,6 +161,7 @@ def sync_order_profiles(db: Session, order: Order, client: EsimCardClient | None
             .filter(ESIM.provider == "esimcard", ESIM.provider_esim_tran_no == row.supplier_ref)
             .first()
         )
+        local_status = _local_status(profile.status)
         values = {
             "plan_id": plan.id,
             "iccid": iccid,
@@ -167,9 +171,24 @@ def sync_order_profiles(db: Session, order: Order, client: EsimCardClient | None
             "provider_esim_tran_no": row.supplier_ref,
             "provider_status": profile.status,
             "provider_qr_url": profile.universal_link,
-            "status": _local_status(profile.status),
+            "status": local_status,
             "validity_days": plan.validity_days,
+            # The allowance comes from the plan, because the wholesaler does not
+            # send one. Its listing carries id, iccid, status, the QR and a
+            # free-text bundle name — no megabytes and no expiry. Left out, the
+            # column keeps its zero default and the customer's page says they
+            # bought nothing: every eSIMCard profile we have sold reads 0 GB.
+            "data_total_mb": plan.data_amount_mb or 0,
+            "last_synced_at": utcnow(),
         }
+        # The countdown starts when the profile is installed, not when it is
+        # bought — a "Released" one may sit unused for days. So the expiry is
+        # written the first time the supplier says it is live, and never moved
+        # afterwards. Without it an active eSIM has no expiry at all, which the
+        # admin's own validation calls invalid and the clean-up job never ends.
+        if local_status == "active" and (existing is None or existing.expires_at is None):
+            values["expires_at"] = utcnow() + timedelta(days=plan.validity_days or 0)
+
         if existing:
             for field, value in values.items():
                 setattr(existing, field, value)

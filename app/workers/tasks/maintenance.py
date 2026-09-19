@@ -203,3 +203,67 @@ def refresh_esim_usage() -> int:
     if updated:
         logger.info("maintenance.esim_usage_refreshed", updated=updated, seen=len(profiles))
     return updated
+
+
+@celery_app.task(name="maintenance.refresh_esimcard_status")
+def refresh_esimcard_status() -> int:
+    """Move an eSIMCard profile on when the customer installs it.
+
+    The sibling task above deliberately leaves this wholesaler alone, because
+    its listing carries no usage figure and a zero written from a source that
+    does not know is worse than a stale number. Status is different: the listing
+    does carry it, and nothing was reading it. Every profile we have sold through
+    eSIMCard sat at "Released" in our database while the supplier had already
+    moved one of them to "Installed" — a customer with a working eSIM whose
+    account still called it pending.
+
+    The expiry is written here rather than at purchase, and only once: the
+    countdown starts when the profile is installed, and a profile bought on
+    Monday and installed on Friday does not lose four days.
+    """
+    from datetime import timedelta
+
+    from app.db.base import utcnow
+    from app.integrations.esimcard import EsimCardClient
+    from app.integrations.esimcard_sync import _local_status
+
+    client = EsimCardClient()
+    if not client.is_configured:
+        return 0
+
+    with worker_session() as session:
+        rows = (
+            session.execute(
+                select(ESIM).where(
+                    ESIM.provider == "esimcard",
+                    ESIM.status.in_((ESIMStatus.PENDING, ESIMStatus.ACTIVE)),
+                    ESIM.provider_esim_tran_no != "",
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return 0
+
+        remote = client.find_esims({esim.provider_esim_tran_no for esim in rows})
+        checked_at = utcnow()
+        updated = 0
+        for esim in rows:
+            profile = remote.get(esim.provider_esim_tran_no)
+            if profile is None:
+                continue
+            local = _local_status(profile.status)
+            became_live = local == "active" and esim.expires_at is None
+            if esim.provider_status != profile.status or esim.status != local or became_live:
+                updated += 1
+            esim.provider_status = profile.status
+            esim.status = local
+            if became_live:
+                esim.expires_at = checked_at + timedelta(days=esim.validity_days or 0)
+            esim.last_synced_at = checked_at
+        session.commit()
+
+    if updated:
+        logger.info("maintenance.esimcard_status_refreshed", updated=updated, seen=len(rows))
+    return updated

@@ -68,6 +68,13 @@ celery_app.conf.beat_schedule = {
         "task": "maintenance.refresh_esim_usage",
         "schedule": crontab(minute="*/20"),
     },
+    # eSIMCard sends no usage, but it does send status — so this asks only that,
+    # and on the same cadence, so an installed profile stops reading "pending"
+    # within twenty minutes rather than never.
+    "refresh-esimcard-status": {
+        "task": "maintenance.refresh_esimcard_status",
+        "schedule": crontab(minute="*/20"),
+    },
     "warm-catalog-cache": {
         "task": "maintenance.warm_catalog_cache",
         "schedule": crontab(minute="*/10"),
