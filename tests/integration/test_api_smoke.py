@@ -7,7 +7,7 @@ import uuid
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.main import app
+from app.main import SITEMAP_STATIC_PATHS, app
 
 
 @pytest.fixture
@@ -424,10 +424,43 @@ class TestSitemapAndRobots:
         assert response.text.startswith("<?xml")
         assert "<!doctype html" not in response.text.lower()
 
-    async def test_sitemap_lists_the_static_pages(self, client: AsyncClient) -> None:
+    async def test_sitemap_lists_every_static_page_the_storefront_renders(
+        self, client: AsyncClient
+    ) -> None:
+        """The whole list, not a sample of it.
+
+        This used to name five of the paths, and three real pages -- the
+        worldwide catalogue, the route planner and the data calculator -- were
+        prerendered, linked from the header, and in no sitemap at all. A test
+        that checks a sample cannot notice an omission; that is what an
+        omission is.
+
+        Keep this in step with STATIC_ROUTES in the storefront's
+        scripts/prerender.ts. The two lists describe the same set of pages from
+        opposite sides, and a page in one and not the other is either
+        unreachable to a crawler or a 404 in the sitemap.
+        """
         body = (await client.get("/sitemap.xml")).text
-        for path in ("/destinations", "/device-check", "/support", "/esim-nima", "/esim-ornatish"):
+        expected = (
+            "/",
+            "/destinations",
+            "/global",
+            "/marshrut",
+            "/device-check",
+            "/data-calculator",
+            "/support",
+            "/esim-nima",
+            "/esim-ornatish",
+            "/oferta",
+            "/qaytarish",
+            "/maxfiylik",
+        )
+        for path in expected:
             assert f"<loc>https://qulaysim.uz{path}</loc>" in body, path
+        assert len(expected) == len(SITEMAP_STATIC_PATHS), (
+            "a path was added to the sitemap without being named here, so nothing "
+            "checks that it is actually emitted"
+        )
 
     async def test_every_page_is_listed_in_all_three_languages(self, client: AsyncClient) -> None:
         """Uzbek at the root, Russian and English under a prefix.

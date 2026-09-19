@@ -154,6 +154,13 @@ SITEMAP_STATIC_PATHS = (
     ("/", "1.0", "daily"),
     ("/destinations", "0.9", "daily"),
     ("/device-check", "0.7", "monthly"),
+    # Three pages that exist, are prerendered by the storefront and were in no
+    # sitemap: the worldwide catalogue, the data calculator and the route
+    # planner. A page a crawler is never told about is a page that has to be
+    # found by luck.
+    ("/global", "0.9", "daily"),
+    ("/marshrut", "0.8", "weekly"),
+    ("/data-calculator", "0.6", "monthly"),
     ("/support", "0.6", "monthly"),
     # The guide pages — static in the storefront, one per language like the rest.
     ("/esim-nima", "0.7", "monthly"),

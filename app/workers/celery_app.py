@@ -84,6 +84,12 @@ celery_app.conf.beat_schedule = {
     # report arrives at the wrong hour. Each period is offset by five minutes so
     # a day that is also the 1st of the month does not fire four reports in the
     # same second and race for the same Telegram rate limit.
+    # Weekly, at an hour nothing else uses: the audit log grows only while
+    # somebody is changing orders, and a week of it is a few dozen rows.
+    "trim-audit-log": {
+        "task": "maintenance.trim_audit_log",
+        "schedule": crontab(minute=40, hour=3, day_of_week=0),
+    },
     "report-daily": {
         "task": "reports.send_period",
         "schedule": crontab(minute=0, hour=2),

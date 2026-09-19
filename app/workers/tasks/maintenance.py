@@ -267,3 +267,51 @@ def refresh_esimcard_status() -> int:
     if updated:
         logger.info("maintenance.esimcard_status_refreshed", updated=updated, seen=len(rows))
     return updated
+
+
+#: How long a row image is worth keeping.
+#:
+#: The audit triggers exist to answer "who changed this order, and to what"
+#: after the fact. Ninety days outlives any dispute this shop has had, and an
+#: audit table nobody trims is a table that eventually costs more to back up
+#: than the data it is auditing — this one reached 31 MB, larger than the entire
+#: catalogue, before anyone looked.
+AUDIT_RETENTION_DAYS = 90
+
+
+@celery_app.task(name="maintenance.trim_audit_log")
+def trim_audit_log() -> int:
+    """Drop audit rows older than the retention window.
+
+    Written as raw SQL against a table Django and SQLAlchemy both know nothing
+    about: `audit_row_change` is created by triggers installed outside either
+    ORM, so there is no model to delete through. The task tolerates the table
+    being absent, because a database restored from before the triggers existed
+    is a valid database.
+    """
+    from sqlalchemy import text
+
+    with worker_session() as session:
+        exists = session.execute(
+            text("SELECT to_regclass('public.audit_row_change') IS NOT NULL")
+        ).scalar()
+        if not exists:
+            return 0
+        # Through the connection rather than the session: `Session.execute` is
+        # typed as returning a plain Result, which has no rowcount, and the
+        # number deleted is the only thing here worth a log line.
+        removed = (
+            session.connection()
+            .execute(
+                text(
+                    "DELETE FROM audit_row_change WHERE at < now() - make_interval(days => :days)"
+                ),
+                {"days": AUDIT_RETENTION_DAYS},
+            )
+            .rowcount
+        )
+        session.commit()
+
+    if removed:
+        logger.info("maintenance.audit_trimmed", removed=removed, keep_days=AUDIT_RETENTION_DAYS)
+    return removed or 0
