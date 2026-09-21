@@ -95,7 +95,8 @@ class TestWhatItRescues:
         """By then a customer is abroad with a receipt and no internet."""
         result = _run(monkeypatch, _rows(timedelta(minutes=25)))
         assert result["alarming"] == 1
-        assert captured["alerts"] and captured["alerts"][0][0] == [1]
+        # (id, age) now, so the repeat alert can say how long the wait has been.
+        assert captured["alerts"] and [oid for oid, _ in captured["alerts"][0][0]] == [1]
 
     def test_it_still_dispatches_when_it_alerts(self, monkeypatch, captured) -> None:
         """The alert tells a human; the dispatch is what fixes it."""
@@ -161,40 +162,45 @@ def alerting(monkeypatch):
     return {"redis": fake, "sent": sent}
 
 
+#: A stand-in age for the tests that are not about the age. Past ALERT_AFTER,
+#: because an order younger than that never reaches `_alert` at all.
+STUCK = timedelta(hours=2)
+
+
 class TestItDoesNotRepeatItself:
     """The rescue runs every five minutes. An order that stays stuck must not
     send the same message twelve times an hour — that is how an alert stops
     being read, and the one alert worth reading is this one."""
 
     def test_the_first_time_an_order_is_stuck_it_is_announced(self, alerting) -> None:
-        rescue._alert([141], 0)
+        rescue._alert([(141, STUCK)], 0)
         assert len(alerting["sent"]) == 1
         assert "#141" in alerting["sent"][0]
 
     def test_the_second_run_says_nothing(self, alerting) -> None:
-        rescue._alert([141], 0)
-        rescue._alert([141], 0)
+        rescue._alert([(141, STUCK)], 0)
+        rescue._alert([(141, STUCK)], 0)
         assert len(alerting["sent"]) == 1
 
     def test_a_different_order_still_gets_through(self, alerting) -> None:
         """Silence is per order, not a mute on the whole alert."""
-        rescue._alert([141], 0)
-        rescue._alert([142], 0)
+        rescue._alert([(141, STUCK)], 0)
+        rescue._alert([(142, STUCK)], 0)
         assert len(alerting["sent"]) == 2
         assert "#142" in alerting["sent"][1]
 
     def test_the_silence_expires(self, alerting) -> None:
         """A day, not forever: somebody has paid and has nothing, so an order
         nobody fixes should keep asking once a day rather than stop asking."""
-        rescue._alert([141], 0)
+        rescue._alert([(141, STUCK)], 0)
         assert alerting["redis"].keys["rescue:alerted:141"] == rescue.ALERT_SILENCE
         assert rescue.ALERT_SILENCE >= 60 * 60
 
     def test_nothing_fresh_means_no_message_at_all(self, alerting) -> None:
         """Not an empty bulletin — no bulletin."""
-        rescue._alert([141], 0)
+        rescue._alert([(141, STUCK)], 0)
         alerting["sent"].clear()
-        rescue._alert([141], 0)
+        rescue._alert([(141, STUCK)], 0)
         assert alerting["sent"] == []
 
     def test_a_broken_redis_alerts_rather_than_swallows(self, monkeypatch, alerting) -> None:
@@ -202,8 +208,8 @@ class TestItDoesNotRepeatItself:
         import redis
 
         monkeypatch.setattr(redis.Redis, "from_url", lambda url: _FakeRedis(broken=True))
-        rescue._alert([141], 0)
-        rescue._alert([141], 0)
+        rescue._alert([(141, STUCK)], 0)
+        rescue._alert([(141, STUCK)], 0)
         assert len(alerting["sent"]) == 2
 
 
@@ -215,11 +221,11 @@ class TestItSaysWhyItFailed:
         monkeypatch.setattr(
             rescue, "_failure_note", lambda ids: {141: "Insufficient Wallet Balance"}
         )
-        rescue._alert([141], 0)
+        rescue._alert([(141, STUCK)], 0)
         assert "Insufficient Wallet Balance" in alerting["sent"][0]
 
     def test_an_order_with_no_reason_is_still_announced(self, alerting) -> None:
-        rescue._alert([141], 0)
+        rescue._alert([(141, STUCK)], 0)
         assert "#141" in alerting["sent"][0]
 
     def test_only_the_latest_attempt_is_quoted(self, monkeypatch) -> None:
@@ -235,3 +241,25 @@ class TestItSaysWhyItFailed:
 
         monkeypatch.setattr(rescue, "worker_session", _explode)
         assert rescue._failure_note([]) == {}
+
+
+class TestItSaysHowLongTheCustomerHasWaited:
+    """The alert repeats every twenty-four hours, and for order #141 it repeated
+    three times word for word. A message identical to yesterday's is one the
+    reader has already decided the meaning of; a number that grows is not."""
+
+    def test_the_message_carries_the_waiting_time(self, alerting) -> None:
+        rescue._alert([(141, timedelta(days=3, hours=4))], 0)
+        assert "3 kun" in alerting["sent"][0]
+
+    def test_the_coarsest_honest_unit(self) -> None:
+        assert rescue._age_label(timedelta(minutes=25)) == "25 daqiqa"
+        assert rescue._age_label(timedelta(hours=5, minutes=50)) == "5 soat"
+        assert rescue._age_label(timedelta(days=1)) == "1 kun"
+        assert rescue._age_label(timedelta(days=3, hours=23)) == "3 kun"
+
+    def test_each_order_carries_its_own(self, alerting) -> None:
+        rescue._alert([(141, timedelta(days=2)), (142, timedelta(minutes=30))], 0)
+        message = alerting["sent"][0]
+        assert "#141 (2 kun)" in message
+        assert "#142 (30 daqiqa)" in message

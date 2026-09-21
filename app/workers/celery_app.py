@@ -25,6 +25,7 @@ celery_app = Celery(
         "app.workers.tasks.diagnostics",
         "app.workers.tasks.rescue",
         "app.workers.tasks.reports",
+        "app.workers.tasks.wallets",
     ],
 )
 
@@ -52,6 +53,14 @@ celery_app.conf.beat_schedule = {
     "rescue-unfulfilled-orders": {
         "task": "rescue.unfulfilled_orders",
         "schedule": crontab(minute="*/5"),
+    },
+    # Ten minutes, for two different reasons that happen to agree. It is the
+    # freshness checkout needs — the balance it refuses a sale on should not be
+    # an hour old — and it is often enough that a wallet emptying mid-morning is
+    # announced mid-morning. Two HTTP calls, so the cadence costs nothing.
+    "check-supplier-wallets": {
+        "task": "maintenance.check_wallets",
+        "schedule": crontab(minute="*/10"),
     },
     "expire-elapsed-esims": {
         "task": "maintenance.expire_esims",

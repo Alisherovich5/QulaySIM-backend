@@ -91,7 +91,10 @@ def rescue_unfulfilled_orders() -> dict[str, int]:
     stale = stale[:MAX_PER_RUN]
 
     redispatched: list[int] = []
-    alarming: list[int] = []
+    # Carries the age as well as the id, because the alert repeats: see
+    # `_age_label` for why a message that looks identical to yesterday's is
+    # worse than no message at all.
+    alarming: list[tuple[int, timedelta]] = []
     for order_id, paid_at, created_at in stale:
         # paid_at is the honest clock here; older rows predate the column, so
         # created_at stands in rather than making them invisible.
@@ -106,13 +109,13 @@ def rescue_unfulfilled_orders() -> dict[str, int]:
         redispatched.append(order_id)
         fulfil_paid_order.delay(order_id)
         if age >= ALERT_AFTER:
-            alarming.append(order_id)
+            alarming.append((order_id, age))
 
     if redispatched:
         logger.warning(
             "rescue.redispatched",
             orders=redispatched,
-            alarming=alarming,
+            alarming=[oid for oid, _ in alarming],
             skipped=overflow,
         )
     if alarming or overflow:
@@ -178,7 +181,26 @@ def _failure_note(order_ids: list[int]) -> dict[int, str]:
     return notes
 
 
-def _alert(order_ids: list[int], overflow: int) -> None:
+def _age_label(age: timedelta) -> str:
+    """How long the customer has been waiting, in the coarsest honest unit.
+
+    The alert repeats every twenty-four hours, and until now the second message
+    was word-for-word the first. Order #141 sent three of them and each one read
+    like the one before it, which is how a real alert comes to look like a stuck
+    one — the reader has already decided what this message says. A number that
+    grows says something new every day: not "an order is stuck" but "this has
+    been three days".
+    """
+    days = age.days
+    if days >= 1:
+        return f"{days} kun"
+    hours = int(age.total_seconds() // 3600)
+    if hours >= 1:
+        return f"{hours} soat"
+    return f"{int(age.total_seconds() // 60)} daqiqa"
+
+
+def _alert(alarming: list[tuple[int, timedelta]], overflow: int) -> None:
     """Tell the owner, once.
 
     Deliberately not a daily summary: this is the one failure mode where the
@@ -190,16 +212,17 @@ def _alert(order_ids: list[int], overflow: int) -> None:
 
     from app.integrations.telegram import send_html_blocking
 
-    fresh = _first_alert(order_ids)
+    ages = dict(alarming)
+    fresh = _first_alert([oid for oid, _ in alarming])
     if not fresh and not overflow:
         return
 
     notes = _failure_note(fresh)
     lines = ["<b>⚠️ To'landi, lekin eSIM yetkazilmadi</b>"]
     if fresh:
-        listed = ", ".join(f"#{oid}" for oid in fresh[:10])
+        listed = ", ".join(f"#{oid} ({_age_label(ages[oid])})" for oid in fresh[:10])
         more = f" va yana {len(fresh) - 10} ta" if len(fresh) > 10 else ""
-        lines.append(f"20 daqiqadan oshgan buyurtmalar: {listed}{more}")
+        lines.append(f"Kutayotgan buyurtmalar: {listed}{more}")
         for oid in fresh[:10]:
             if oid in notes:
                 lines.append(f"#{oid} — ta'minotchi: <i>{notes[oid]}</i>")

@@ -54,6 +54,18 @@ def _esimaccess() -> float | None:
         return None
 
 
+def fetch_balances() -> dict[str, float | None]:
+    """Ask both wholesalers, in this thread. `None` is "we could not find out".
+
+    Split out of `wallet_balances` so the worker can use it without an event
+    loop: the wallet watch runs in Celery, where `asyncio.run` around a pair of
+    synchronous HTTP clients would be ceremony around nothing. The dashboard
+    still goes through `wallet_balances`, which adds the threading and the cache
+    an HTTP request needs.
+    """
+    return {"esimcard": _esimcard(), "esimaccess": _esimaccess()}
+
+
 async def wallet_balances() -> dict[str, float | None]:
     try:
         cached = await get_redis().get(CACHE_KEY)

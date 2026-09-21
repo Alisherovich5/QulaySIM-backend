@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
@@ -15,6 +16,7 @@ from app.domain.pricing import PricedLine, PricingError, PromoRule, Quote, build
 from app.repositories import catalog as catalog_repo
 from app.repositories import orders as order_repo
 from app.schemas.commerce import CartItemIn
+from app.services.supplier_wallets import can_cover, known_balances
 
 logger = get_logger(__name__)
 
@@ -52,7 +54,7 @@ def sells_at_a_loss(plan: Any) -> bool:
     return bool(plan.price_usd <= cost)
 
 
-def is_fulfillable(plan: Any) -> bool:
+def is_fulfillable(plan: Any, balances: Mapping[str, float] | None = None) -> bool:
     """Whether any wholesaler we can order from could actually supply this plan.
 
     Checkout's last line of defence, and the one that has to hold: everything
@@ -64,15 +66,35 @@ def is_fulfillable(plan: Any) -> bool:
 
     A supplier counts only if it is in FULFILLABLE_PROVIDERS — we have code that
     can buy from it — and either has an available offer for this plan or is the
-    plan's denormalised provider with a package code. Deliberately does not check
-    the wholesaler's balance: a wallet can be topped up in a minute, and refusing
-    a sale because of it would take the shop offline over a bookkeeping state.
+    plan's denormalised provider with a package code.
+
+    `balances` is the second half of the same question, added after order #141
+    took $5.91 for a plan only eSIMCard stocked while eSIMCard's wallet held
+    nothing. Having ordering code for a wholesaler is not the same as that
+    wholesaler being able to sell today. A supplier whose recorded balance
+    cannot cover this plan's cost stops counting, so a plan with a second source
+    still sells and only the ones nobody can deliver go quiet. Omitted — as every
+    caller outside `price_cart` omits it — it means "do not ask", and the older
+    answer stands: a wallet is a bookkeeping state and a sale should not hang on
+    one. What must never happen is the reverse, a balance we failed to read
+    counting as zero; `supplier_wallets` leaves unknown balances out of the
+    mapping entirely, so there is nothing here that can get that wrong.
     """
     fulfillable = set(settings.fulfillable_providers)
+    wallets = balances if balances is not None else {}
+    # getattr rather than attribute access: this takes `Any` on purpose — the
+    # sourcing engine and the admin both hand it their own shapes — and a plan
+    # that cannot say what it costs is not the same as one that costs nothing.
     for offer in getattr(plan, "offers", None) or []:
-        if offer.provider in fulfillable and offer.is_available:
+        if (
+            offer.provider in fulfillable
+            and offer.is_available
+            and can_cover(offer.provider, getattr(offer, "cost_usd", None), wallets)
+        ):
             return True
-    return bool(plan.provider in fulfillable and plan.provider_package_code)
+    if not (plan.provider in fulfillable and plan.provider_package_code):
+        return False
+    return can_cover(plan.provider, getattr(plan, "cost_usd", None), wallets)
 
 
 async def price_cart(
@@ -92,12 +114,17 @@ async def price_cart(
     # One query for the whole cart rather than one per line.
     plans = await catalog_repo.get_active_plans(session, [i.plan_id for i in items])
 
+    # One Redis read for the whole cart, and never a call to a wholesaler: see
+    # app/services/supplier_wallets.py for why the balance is read from a cache
+    # here rather than asked for at the moment somebody is waiting to pay.
+    balances = await known_balances()
+
     lines: list[PricedLine] = []
     for item in items:
         plan = plans.get(item.plan_id)
         if plan is None:
             raise DomainError(f"Plan {item.plan_id} is unavailable")
-        if not is_fulfillable(plan):
+        if not is_fulfillable(plan, balances):
             # Refused before any money is involved. The message stays vague on
             # purpose: which wholesaler stocks what is not the customer's
             # business, and "temporarily unavailable" is the honest summary.
@@ -107,6 +134,7 @@ async def price_cart(
                 title=plan.title,
                 provider=plan.provider,
                 offers=len(getattr(plan, "offers", None) or []),
+                balances=balances,
             )
             raise DomainError(f"Plan {item.plan_id} is temporarily unavailable")
         if sells_at_a_loss(plan):
