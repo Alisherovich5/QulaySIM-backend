@@ -106,7 +106,7 @@ async def _wallets(session: SessionDep) -> list[Wallet]:
     through. A supplier that does not answer shows as unhealthy with no
     balance rather than as zero, which would read as "empty".
     """
-    from app.services.backoffice.wallets import wallet_balances
+    from app.integrations.wallets import wallet_balances
 
     spent = await _spent_7d(session)
     out: list[Wallet] = []

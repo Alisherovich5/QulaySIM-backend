@@ -20,8 +20,8 @@ from decimal import Decimal
 import pytest
 
 from app.core.config import settings
+from app.integrations.wallets import can_cover
 from app.services.checkout import is_fulfillable
-from app.services.supplier_wallets import can_cover
 
 
 @dataclass
@@ -82,7 +82,7 @@ class TestFailsOpen:
 
     def test_a_supplier_missing_from_the_reading_is_not_assumed_broke(self):
         # What a supplier whose balance endpoint timed out looks like: absent,
-        # not zero. `supplier_wallets` drops unknowns for this reason.
+        # not zero. `integrations.wallets` drops unknowns for this reason.
         plan = FakePlan(offers=[FakeOffer("esimcard", Decimal("3.94"))])
         assert is_fulfillable(plan, {"esimaccess": 45.48}) is True
 

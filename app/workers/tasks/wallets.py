@@ -2,7 +2,7 @@
 
 Two jobs, and the order matters. It records what each wholesaler's wallet holds
 so checkout can refuse a plan nobody can pay for (see
-`app/services/supplier_wallets.py`), and it tells the owner while there is still
+`app/integrations/wallets.py`), and it tells the owner while there is still
 time to top up.
 
 That second job is the one that was missing. Order #141 was not a mystery to the
@@ -21,10 +21,7 @@ either.
 
 from __future__ import annotations
 
-import json
-
 from app.core.logging import get_logger
-from app.services.supplier_wallets import WALLET_KEY, WALLET_TTL
 from app.workers.celery_app import celery_app
 
 logger = get_logger("wallets")
@@ -45,10 +42,10 @@ ALERT_SILENCE = 6 * 60 * 60
 @celery_app.task(name="maintenance.check_wallets")
 def check_wallets() -> dict[str, float | None]:
     """Record every wholesaler's balance, and warn about the thin ones."""
-    from app.services.backoffice.wallets import fetch_balances
+    from app.integrations.wallets import fetch_balances, record
 
     balances = fetch_balances()
-    _remember({key: value for key, value in balances.items() if value is not None})
+    record(balances)
 
     low = sorted(
         (key, value)
@@ -68,23 +65,6 @@ def check_wallets() -> dict[str, float | None]:
         logger.warning("wallets.unreachable", providers=unreachable)
 
     return balances
-
-
-def _remember(balances: dict[str, float]) -> None:
-    """Leave the numbers where checkout can read them without asking anyone.
-
-    A failure here is logged and swallowed. The alternative — letting it raise —
-    would lose the alert below, which is the half of this task a person acts on.
-    """
-    import redis
-
-    from app.core.config import settings
-
-    try:
-        client = redis.Redis.from_url(str(settings.redis_url))
-        client.setex(WALLET_KEY, WALLET_TTL, json.dumps(balances))
-    except Exception:  # noqa: BLE001 - checkout falls back to selling, which is safe
-        logger.warning("wallets.record_failed")
 
 
 def _alert(low: list[tuple[str, float]]) -> None:

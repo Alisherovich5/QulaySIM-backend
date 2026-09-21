@@ -473,31 +473,55 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
             )
             return False
 
-        # A wallet that cannot pay for this order goes last.
+        # A wallet that cannot pay for this order goes last — and if none of
+        # them can pay, nothing is attempted at all.
         #
-        # The fallback already worked — a supplier that refuses is skipped and
-        # the next one tried — but it learned the wallet was empty by
-        # attempting the purchase: a round trip, a failed row in the ledger and
-        # an alarm in the operations chat, for an order the other supplier
-        # could have taken straight away.
+        # The fallback already worked: a supplier that refuses is skipped and
+        # the next one tried. What it could not do was tell the difference
+        # between "this supplier is having a bad minute" and "there is no money
+        # to spend", and it learned which by attempting the purchase — a round
+        # trip, a failed row in the ledger, an alarm in the operations chat.
         #
-        # Reordering, never dropping. A balance we could not read is not a
-        # supplier we may rule out, and a stale one must not be able to make an
-        # order unfulfillable; the purchase attempt stays the authority.
-        if len(routes) > 1:
-            known = balances()
-            affordable = [
-                r for r in routes if can_cover(r.provider, float(r.total_cost_usd), known)
-            ]
-            short = [r for r in routes if r not in affordable]
-            if short:
-                logger.info(
-                    "fulfil.wallet_too_low_for_route",
-                    order_id=order_id,
-                    deprioritised=[r.provider for r in short],
-                    preferred=[r.provider for r in affordable],
-                )
-                routes = affordable + short
+        # Order #141 is what that costs when the answer never changes. One
+        # route, an empty eSIMCard wallet, and a refusal raised back to Celery,
+        # which retried it ten times with backoff while the rescue re-dispatched
+        # the whole thing every five minutes: about 1,700 calls a day to buy
+        # something that could not be bought, for three days, drowning every
+        # other error in the log.
+        #
+        # So the reordering stays advisory — a balance we could not read is not
+        # a supplier we may rule out — but a *known* shortfall on every route is
+        # a fact, and acting on a fact is not a guess. `can_cover` answers yes
+        # to anything it does not know, so reaching this branch means every
+        # balance was read and every one of them was too small.
+        known = balances()
+        affordable = [r for r in routes if can_cover(r.provider, r.total_cost_usd, known)]
+        short = [r for r in routes if r not in affordable]
+
+        if not affordable:
+            # Deliberately not raising. An exception here is a promise to Celery
+            # that trying again might work, and this is the one case where it
+            # cannot: the retry would place the same call against the same empty
+            # wallet. The order stays paid and undelivered, the rescue keeps
+            # sweeping it up every five minutes for free, and the wallet watch
+            # is what asks a person to fix it.
+            logger.error(
+                "fulfil.no_affordable_wallet",
+                order_id=order_id,
+                providers=[r.provider for r in routes],
+                needed=[str(r.total_cost_usd) for r in routes],
+                balances=known,
+            )
+            return False
+
+        if short:
+            logger.info(
+                "fulfil.wallet_too_low_for_route",
+                order_id=order_id,
+                deprioritised=[r.provider for r in short],
+                preferred=[r.provider for r in affordable],
+            )
+            routes = affordable + short
 
         last_error: SupplierError | None = None
         for index, route in enumerate(routes):

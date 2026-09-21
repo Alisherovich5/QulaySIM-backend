@@ -1,31 +1,55 @@
-"""What each supplier's wallet holds, for code that must not spend blindly.
+"""What each wholesaler's wallet holds, for every part of the shop that spends it.
 
-Fulfilment already falls back: a supplier that refuses an order is logged and
-the next one is tried. But it learns the wallet is empty by attempting the
-purchase, which costs a round trip, writes a failure into the ledger and
-alarms the operations chat — for an order the other supplier could have taken
-straight away.
+One module because there used to be three, with two `can_cover` implementations
+and two cache keys for the same fact — the shape duplication takes when the
+checkout guard, the routing preference and the dashboard are each built on a
+different day. A second copy of "how much money is left" is a second answer, and
+the one that goes stale is always the one somebody is about to spend against.
 
-Reading the balance first turns that into a routing decision. It is advisory,
-never a veto: a balance that cannot be read, or one that is a few seconds
-stale, must not make an order unfulfillable. The worst a wrong answer here can
-do is put the routes in a worse order, which is exactly what happens today.
+Three readers, and they want genuinely different things, which is why there are
+two caches rather than one:
 
-Synchronous, because the caller is a Celery task. The API has its own async
-reader; both share this cache key, so whichever asked last serves the other.
+* **Checkout** (`known_balances`) must never call a wholesaler. A quote is a
+  customer waiting on a page and a balance endpoint is a third party that can
+  hang, so checkout reads only what the wallet watch left behind and treats a
+  missing key as "no opinion".
+* **Fulfilment and the dashboard** (`balances`, `wallet_balances`) may ask,
+  because by then somebody is either spending the money or looking straight at
+  the number. Half a minute of cache keeps a refreshed dashboard from turning
+  into a rate-limit problem upstream.
+* **The wallet watch** (`record`) writes the long-lived key the first reader
+  depends on.
+
+Every unknown resolves the same way everywhere: a balance that could not be
+read, a cache that is gone, a supplier that did not answer — none of them is a
+supplier we may rule out. It is one we have no opinion about, and the purchase
+attempt stays the authority.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Mapping
+from decimal import Decimal
+from typing import Any
 
 from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-CACHE_KEY = "qs:bo:wallets"
-CACHE_TTL = 30
+#: Asked of the wholesaler when it is missing. Short, because the readers of
+#: this one are about to act on it.
+LIVE_KEY = "qs:wallet:live"
+LIVE_TTL = 30
+
+#: Written only by the wallet watch and read without ever asking a supplier.
+#: Comfortably longer than the watch's ten-minute cadence, so one missed run
+#: does not blind checkout, and short enough that a worker down for an hour
+#: stops being quoted as fact.
+WATCH_KEY = "qs:wallet:watch"
+WATCH_TTL = 45 * 60
 
 
 def _esimcard() -> float | None:
@@ -57,38 +81,126 @@ def _esimaccess() -> float | None:
         return None
 
 
-def balances() -> dict[str, float | None]:
-    """Both wallets, in dollars. None for a supplier that did not answer."""
+def fetch_balances() -> dict[str, float | None]:
+    """Ask both wholesalers, in this thread. `None` is "we could not find out"."""
+    return {"esimcard": _esimcard(), "esimaccess": _esimaccess()}
+
+
+def _redis() -> Any:
+    """A synchronous client. Typed loosely because redis-py's generics differ
+    between the sync and async clients and nothing here needs the distinction."""
     import redis
 
+    return redis.Redis.from_url(str(settings.redis_url))
+
+
+def balances() -> dict[str, float | None]:
+    """Both wallets, in dollars, for a synchronous caller. Asks if the cache is cold."""
     client = None
     try:
-        client = redis.Redis.from_url(str(settings.redis_url))
-        cached = client.get(CACHE_KEY)
+        client = _redis()
+        cached = client.get(LIVE_KEY)
         if cached:
             loaded: dict[str, float | None] = json.loads(cached)
             return loaded
     except Exception as exc:  # noqa: BLE001 - Redis down means ask the supplier
         logger.warning("wallet.cache_read_failed", error=str(exc))
 
-    found: dict[str, float | None] = {"esimcard": _esimcard(), "esimaccess": _esimaccess()}
+    found = fetch_balances()
 
     if client is not None:
         try:
-            client.setex(CACHE_KEY, CACHE_TTL, json.dumps(found))
+            client.setex(LIVE_KEY, LIVE_TTL, json.dumps(found))
         except Exception as exc:  # noqa: BLE001
             logger.warning("wallet.cache_write_failed", error=str(exc))
     return found
 
 
-def can_cover(provider: str, cost_usd: float, known: dict[str, float | None]) -> bool:
-    """Whether this supplier's wallet covers a purchase of `cost_usd`.
+async def wallet_balances() -> dict[str, float | None]:
+    """The same answer for the dashboard, off the event loop.
 
-    True when the balance is unknown. A supplier we cannot ask is not a
-    supplier we may rule out — it is one we have no opinion about, and the
-    purchase attempt is still the authoritative answer.
+    The supplier clients are synchronous, so each goes to a worker thread: on
+    the loop a slow wholesaler would stall every other request on the API.
+    """
+    from app.core.cache import get_redis
+
+    try:
+        cached = await get_redis().get(LIVE_KEY)
+        if cached:
+            loaded: dict[str, float | None] = json.loads(cached)
+            return loaded
+    except Exception as exc:  # noqa: BLE001 - Redis down means ask the supplier
+        logger.warning("wallet.cache_read_failed", error=str(exc))
+
+    card, access = await asyncio.gather(
+        asyncio.to_thread(_esimcard), asyncio.to_thread(_esimaccess)
+    )
+    found: dict[str, float | None] = {"esimcard": card, "esimaccess": access}
+
+    try:
+        await get_redis().setex(LIVE_KEY, LIVE_TTL, json.dumps(found))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("wallet.cache_write_failed", error=str(exc))
+    return found
+
+
+def record(found: Mapping[str, float | None]) -> None:
+    """Leave the known balances where checkout can read them without asking anyone.
+
+    Only the numbers we actually have: an unreadable balance is left out rather
+    than written as zero, so `known_balances` cannot hand checkout a "wallet is
+    empty" that really means "the supplier did not answer".
+
+    A failure here is logged and swallowed. Checkout falls back to selling,
+    which is the safe direction.
+    """
+    keep = {key: float(value) for key, value in found.items() if value is not None}
+    try:
+        _redis().setex(WATCH_KEY, WATCH_TTL, json.dumps(keep))
+    except Exception:  # noqa: BLE001
+        logger.warning("wallet.record_failed")
+
+
+async def known_balances() -> dict[str, float]:
+    """What the watch last recorded. Never asks a supplier; unknowns are absent."""
+    from app.core.cache import get_redis
+
+    try:
+        raw = await get_redis().get(WATCH_KEY)
+    except Exception as exc:  # noqa: BLE001 - a cache outage must not block a sale
+        logger.warning("wallet.cache_read_failed", error=str(exc))
+        return {}
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        logger.warning("wallet.cache_unparsable")
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {
+        key: float(value)
+        for key, value in loaded.items()
+        if isinstance(value, int | float) and not isinstance(value, bool)
+    }
+
+
+def can_cover(
+    provider: str,
+    cost_usd: Decimal | float | None,
+    known: Mapping[str, float | None],
+) -> bool:
+    """Whether this wallet covers one purchase of `cost_usd`.
+
+    True when the balance is unknown, and true when the cost is: the question
+    is "do we already know this will fail", not "are we sure it will work".
     """
     balance = known.get(provider)
     if balance is None:
         return True
-    return balance >= cost_usd
+    try:
+        needed = float(cost_usd or 0)
+    except (TypeError, ValueError):
+        return True
+    return needed <= balance

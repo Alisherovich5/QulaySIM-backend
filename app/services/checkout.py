@@ -13,10 +13,10 @@ from app.core.errors import DomainError
 from app.core.logging import get_logger
 from app.db.models import PromoCode
 from app.domain.pricing import PricedLine, PricingError, PromoRule, Quote, build_quote
+from app.integrations.wallets import can_cover, known_balances
 from app.repositories import catalog as catalog_repo
 from app.repositories import orders as order_repo
 from app.schemas.commerce import CartItemIn
-from app.services.supplier_wallets import can_cover, known_balances
 
 logger = get_logger(__name__)
 
@@ -77,7 +77,7 @@ def is_fulfillable(plan: Any, balances: Mapping[str, float] | None = None) -> bo
     caller outside `price_cart` omits it — it means "do not ask", and the older
     answer stands: a wallet is a bookkeeping state and a sale should not hang on
     one. What must never happen is the reverse, a balance we failed to read
-    counting as zero; `supplier_wallets` leaves unknown balances out of the
+    counting as zero; `integrations.wallets` leaves unknown balances out of the
     mapping entirely, so there is nothing here that can get that wrong.
     """
     fulfillable = set(settings.fulfillable_providers)
@@ -115,7 +115,7 @@ async def price_cart(
     plans = await catalog_repo.get_active_plans(session, [i.plan_id for i in items])
 
     # One Redis read for the whole cart, and never a call to a wholesaler: see
-    # app/services/supplier_wallets.py for why the balance is read from a cache
+    # app/integrations/wallets.py for why the balance is read from a cache
     # here rather than asked for at the moment somebody is waiting to pay.
     balances = await known_balances()
 
