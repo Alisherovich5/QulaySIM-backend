@@ -659,3 +659,93 @@ class TestFiltersActuallyFilter:
             closed = await client.get(f"{PREFIX}/tickets?state=closed", headers=headers)
         assert {row["state"] for row in new.json()["items"]} == {"new"}
         assert {row["state"] for row in closed.json()["items"]} == {"closed"}
+
+
+async def _all_orders(client: AsyncClient, headers: dict[str, str], stage: str) -> list[dict]:
+    """Every page of one stage. The endpoint caps a page at 200 on purpose, so
+    a test that asks for 500 gets a 422 and a confusing KeyError."""
+    out: list[dict] = []
+    page = 1
+    while True:
+        body = (
+            await client.get(f"{PREFIX}/orders?size=200&page={page}&stage={stage}", headers=headers)
+        ).json()
+        out.extend(body["items"])
+        if page >= body["pages"]:
+            return out
+        page += 1
+
+
+class TestTheTilesAgreeWithTheList:
+    """The count above a list and the list itself must be derived from one
+    rule. They were not: top-ups leave no eSIM row, so a fully applied one was
+    delivered in the list and not in the tile — 47 against 44, with nothing on
+    screen to explain the gap.
+    """
+
+    async def test_delivered_counts_the_same_rows_the_filter_returns(self) -> None:
+        person = await _staff()
+        headers = {"Authorization": f"Bearer {_token(person)}"}
+        async with await _client() as client:
+            counts = (await client.get(f"{PREFIX}/orders?size=1", headers=headers)).json()["counts"]
+            rows = await _all_orders(client, headers, "delivered")
+        assert counts["delivered"] == len(rows)
+
+    async def test_every_stage_adds_up_to_the_total(self) -> None:
+        person = await _staff()
+        headers = {"Authorization": f"Bearer {_token(person)}"}
+        async with await _client() as client:
+            body = (await client.get(f"{PREFIX}/orders?size=1", headers=headers)).json()
+        counts = body["counts"]
+        assert counts["pending"] + counts["delivered"] + counts["failed"] <= counts["total"], (
+            "more orders counted than exist"
+        )
+        # `paid and in flight` is the remainder and has no tile of its own.
+        assert counts["total"] == body["total"]
+
+    async def test_a_supplier_refusal_makes_the_order_read_as_failed(self) -> None:
+        """A paid order the supplier refused used to read `paid` — in flight,
+        nothing to do — while the customer had no eSIM and nobody was told."""
+        from datetime import UTC, datetime
+
+        from app.db.models import SupplierPurchase
+
+        person = await _staff()
+        async with SessionFactory() as session:
+            customer = Customer(
+                email=f"ref-{uuid.uuid4().hex[:8]}@example.com", full_name="Refused"
+            )
+            session.add(customer)
+            await session.flush()
+            plan = (await session.execute(select(Plan).limit(1))).scalars().first()
+            assert plan is not None, "seed the catalogue first"
+            order = Order(
+                customer_id=customer.id,
+                status="paid",
+                total=Decimal("10"),
+                amount_uzs=Decimal("120000"),
+                paid_at=datetime.now(UTC),
+            )
+            session.add(order)
+            await session.flush()
+            session.add(
+                OrderItem(order_id=order.id, plan_id=plan.id, unit_price=Decimal("10"), quantity=1)
+            )
+            session.add(
+                SupplierPurchase(
+                    order_id=order.id,
+                    provider="esimcard",
+                    line_key=uuid.uuid4().hex[:12],
+                    state="failed",
+                    note="Insufficient Wallet Balance",
+                )
+            )
+            await session.commit()
+            order_id = order.id
+
+        headers = {"Authorization": f"Bearer {_token(person)}"}
+        async with await _client() as client:
+            rows = await _all_orders(client, headers, "failed")
+        row = next((r for r in rows if r["id"] == order_id), None)
+        assert row is not None, "a refused order is not on the failed list"
+        assert row["failure"] == "Insufficient Wallet Balance"

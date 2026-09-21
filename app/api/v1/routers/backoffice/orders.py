@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import SessionDep
@@ -101,21 +101,34 @@ def code_of(order: Order) -> str:
     return f"QS-{order.id:05d}"
 
 
-def stage_of(order: Order, *, has_esim: bool, topup_done: bool, is_topup: bool) -> Stage:
+def stage_of(
+    order: Order, *, has_esim: bool, topup_done: bool, is_topup: bool, refused: bool
+) -> Stage:
     """The four words an operator actually uses, derived rather than stored.
 
     `orders_order.status` says paid/pending/cancelled; whether the customer
-    RECEIVED anything lives in another table entirely. Collapsing both into one
-    word here is the whole point of the list: "paid" on this screen means paid
-    and still waiting, which is the row that needs a human.
+    RECEIVED anything lives in another table entirely, and why they did not
+    lives in a third. Collapsing all of it into one word here is the whole
+    point of the list.
+
+      pending   — nobody has paid yet. Nothing to do.
+      paid      — paid, not delivered, nothing has gone wrong yet. In flight.
+      failed    — cancelled, or the supplier refused. Needs a person.
+      delivered — the customer has it.
+
+    `failed` covers a refused supplier purchase and not only a cancelled order,
+    because otherwise the tile that counts undelivered orders read zero while a
+    customer sat with a paid order and no eSIM — which is exactly the state the
+    screen exists to surface.
     """
     if order.status == "cancelled":
         return "failed"
     if order.status != "paid":
         return "pending"
-    if is_topup:
-        return "delivered" if topup_done else "paid"
-    return "delivered" if has_esim else "paid"
+    delivered = topup_done if is_topup else has_esim
+    if delivered:
+        return "delivered"
+    return "failed" if refused else "paid"
 
 
 def days_left(esim: ESIM) -> int | None:
@@ -169,11 +182,15 @@ async def _rows(session: SessionDep, orders: list[Order]) -> dict[int, dict[str,
             )
         ).all()
     }
-    notes = {
-        row[0]: row[1]
+    trouble = {
+        row[0]: (row[1], row[2])
         for row in (
             await session.execute(
-                select(SupplierPurchase.order_id, func.max(SupplierPurchase.note))
+                select(
+                    SupplierPurchase.order_id,
+                    func.max(SupplierPurchase.note),
+                    func.bool_or(SupplierPurchase.state == "failed"),
+                )
                 .where(SupplierPurchase.order_id.in_(ids), SupplierPurchase.state != "done")
                 .group_by(SupplierPurchase.order_id)
             )
@@ -185,7 +202,8 @@ async def _rows(session: SessionDep, orders: list[Order]) -> dict[int, dict[str,
             "is_topup": bool(lines.get(oid, (False, False))[0]),
             "topup_done": bool(lines.get(oid, (False, False))[1]),
             "has_esim": esims.get(oid, 0) > 0,
-            "note": notes.get(oid) or "",
+            "note": (trouble.get(oid) or ("", False))[0] or "",
+            "refused": bool((trouble.get(oid) or ("", False))[1]),
         }
         for oid in ids
     }
@@ -198,6 +216,7 @@ def _shape(order: Order, extra: dict[str, object]) -> OrderRow:
         has_esim=bool(extra["has_esim"]),
         topup_done=bool(extra["topup_done"]),
         is_topup=is_topup,
+        refused=bool(extra["refused"]),
     )
     return OrderRow(
         id=order.id,
@@ -214,37 +233,52 @@ def _shape(order: Order, extra: dict[str, object]) -> OrderRow:
 
 
 async def _stage_counts(session: SessionDep) -> dict[str, int]:
-    """How many orders are in each of the four states, over the whole table.
+    """How many orders are in each state, over the whole table.
 
-    The tiles above the list must not count only the page being looked at — the
-    number an operator acts on is "how many are stuck", not "how many are stuck
-    among the fifty I can see". Derived in SQL for the same reason the list is:
-    delivery is recorded in another table, so `status` alone cannot say it.
+    The tiles must not count only the page being looked at — the number an
+    operator acts on is "how many are stuck", not "how many are stuck among the
+    fifty I can see".
+
+    Written to mirror `stage_of` exactly. When the two drifted, the list showed
+    47 delivered and the tile above it said 44: top-ups leave no eSIM row, so a
+    fully applied one counted as delivered in one place and not in the other.
     """
-    delivered = select(ESIM.order_id).where(ESIM.order_id == Order.id)
-    topup_open = select(OrderItem.id).where(
+    has_esim = select(ESIM.id).where(ESIM.order_id == Order.id)
+    any_topup = select(OrderItem.id).where(
+        OrderItem.order_id == Order.id, OrderItem.esim_id.isnot(None)
+    )
+    open_topup = select(OrderItem.id).where(
         OrderItem.order_id == Order.id,
         OrderItem.esim_id.isnot(None),
         OrderItem.topup_applied_at.is_(None),
     )
-    total, cancelled, paid, done = (
+    refused = select(SupplierPurchase.id).where(
+        SupplierPurchase.order_id == Order.id, SupplierPurchase.state == "failed"
+    )
+
+    delivered_rule = case(
+        (any_topup.exists(), ~open_topup.exists()),
+        else_=has_esim.exists(),
+    )
+
+    total, cancelled, unpaid, delivered, stuck = (
         await session.execute(
             select(
                 func.count(),
                 func.count().filter(Order.status == "cancelled"),
-                func.count().filter(Order.status == "paid"),
-                func.count().filter(
-                    Order.status == "paid", delivered.exists(), ~topup_open.exists()
-                ),
+                func.count().filter(Order.status.not_in(("paid", "cancelled"))),
+                func.count().filter(Order.status == "paid", delivered_rule),
+                func.count().filter(Order.status == "paid", ~delivered_rule, refused.exists()),
             )
         )
     ).one()
+
     return {
         "total": int(total),
-        "failed": int(cancelled),
-        "delivered": int(done),
-        # Paid and not yet delivered — the row that needs somebody.
-        "pending": int(paid) - int(done),
+        "pending": int(unpaid),
+        "delivered": int(delivered),
+        # Cancelled, plus paid orders the supplier refused: both need a person.
+        "failed": int(cancelled) + int(stuck),
     }
 
 
