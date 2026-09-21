@@ -69,6 +69,7 @@ def _device(**kwargs: object) -> TOTPDevice:
         "user_id": 1,
         "key": b"12345678901234567890".hex(),
         "step": 30,
+        "t0": 0,
         "digits": 8,
         "tolerance": 0,
         "drift": 0,
@@ -92,6 +93,13 @@ class TestTotp:
     def test_the_published_vectors_are_accepted(self, now: int, code: str, counter: int) -> None:
         with patch("app.services.backoffice.auth.time.time", return_value=now):
             assert _totp_matches(_device(), code) == counter
+
+    def test_a_non_zero_t0_shifts_the_window(self) -> None:
+        """django-otp counts from t0. A device enrolled with one and read as if
+        it had none rejects every code its owner can see."""
+        with patch("app.services.backoffice.auth.time.time", return_value=59 + 300):
+            assert _totp_matches(_device(t0=300), "94287082") == 1
+            assert _totp_matches(_device(t0=0), "94287082") is None
 
     def test_a_wrong_code_is_refused(self) -> None:
         with patch("app.services.backoffice.auth.time.time", return_value=59):

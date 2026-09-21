@@ -82,6 +82,9 @@ class TOTPDevice(Base):
     confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     key: Mapped[str] = mapped_column(String(80))
     step: Mapped[int] = mapped_column(SmallInteger, default=30)
+    # Where the counter starts counting from. Zero in practice — but it is a
+    # NOT NULL column django-otp sets, and the counter is wrong if it is ignored.
+    t0: Mapped[int] = mapped_column(BigInteger, default=0)
     digits: Mapped[int] = mapped_column(SmallInteger, default=6)
     tolerance: Mapped[int] = mapped_column(SmallInteger, default=1)
     drift: Mapped[int] = mapped_column(SmallInteger, default=0)

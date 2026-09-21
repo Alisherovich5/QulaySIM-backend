@@ -113,7 +113,10 @@ def _totp_matches(device: TOTPDevice, code: str) -> int | None:
     except ValueError:
         return None
     now = int(time.time())
-    base = now // device.step + device.drift
+    # django-otp counts steps from t0, not from the epoch. It is zero on every
+    # device we have, which is exactly why getting this wrong would go unnoticed
+    # until the day somebody enrolled one that was not.
+    base = (now - device.t0) // device.step + device.drift
     for offset in range(-device.tolerance, device.tolerance + 1):
         counter = base + offset
         if counter <= device.last_t:
