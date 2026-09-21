@@ -82,8 +82,16 @@ def create_access_token(subject: str) -> str:
     return token
 
 
-def create_refresh_token(subject: str) -> tuple[str, str]:
-    return _encode(subject, "refresh", timedelta(days=settings.refresh_token_ttl_days))
+def create_refresh_token(subject: str, ttl: timedelta | None = None) -> tuple[str, str]:
+    """A refresh token and its jti.
+
+    `ttl` overrides the storefront's thirty days. The backoffice asks for
+    twelve hours: it sets a cookie that expires then, and a token that outlives
+    its own cookie is still accepted for the rest of the month by anyone who
+    captured it — the short session would have been a matter of the browser's
+    good manners rather than anything enforced.
+    """
+    return _encode(subject, "refresh", ttl or timedelta(days=settings.refresh_token_ttl_days))
 
 
 def decode_token(token: str, expected_type: TokenType) -> dict[str, Any]:

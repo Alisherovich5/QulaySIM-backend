@@ -64,7 +64,7 @@ def _shape(staff: Staff) -> StaffOut:
 
 def _issue(response: Response, staff: Staff) -> TokenOut:
     subject = service.subject(staff)
-    refresh, _ = create_refresh_token(subject)
+    refresh, _ = create_refresh_token(subject, service.REFRESH_TTL)
     secure = settings.is_production
     response.set_cookie(
         REFRESH_COOKIE,

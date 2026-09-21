@@ -749,3 +749,31 @@ class TestTheTilesAgreeWithTheList:
         row = next((r for r in rows if r["id"] == order_id), None)
         assert row is not None, "a refused order is not on the failed list"
         assert row["failure"] == "Insufficient Wallet Balance"
+
+
+class TestTheSessionIsActuallyShort:
+    async def test_the_refresh_token_expires_with_its_cookie(self) -> None:
+        """Twelve hours, both of them.
+
+        The cookie said Max-Age=43200 while the token inside it was signed for
+        thirty days — the storefront's default. A browser would have dropped it
+        after twelve hours; anybody who captured it would not have.
+        """
+        import jwt
+
+        from app.core.config import settings
+
+        person = await _staff()
+        async with await _client() as client:
+            response = await client.post(
+                f"{PREFIX}/auth/login", json={"email": person.email, "password": PASSWORD}
+            )
+        token = response.cookies["qs_bo_refresh"]
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret,
+            algorithms=[settings.jwt_algorithm],
+            issuer=settings.service_name,
+        )
+        lifetime = payload["exp"] - payload["iat"]
+        assert lifetime == 12 * 3600, f"refresh token lives {lifetime / 3600:.0f}h, not 12h"
