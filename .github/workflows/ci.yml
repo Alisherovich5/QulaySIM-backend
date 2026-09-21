@@ -1,11 +1,16 @@
 name: CI
 
 on:
-  # Every branch we deploy from, not just main. The branch this shop actually
-  # runs on was not being tested at all, which meant a local test failure and a
-  # real one looked the same from here.
-  push: {branches: [main, senior-architecture, payme-integration, production-cleanup]}
+  # One branch. The list used to name four because the shop ran off whichever
+  # was newest, and a branch missing from it was a branch nobody tested — which
+  # is the same shape of bug as a test that never runs.
+  push: {branches: [main]}
   pull_request:
+  # Callable, so the publish workflow can make the image wait for it. Two
+  # workflows on the same push run side by side, which meant a failing test
+  # suite and a published image were not mutually exclusive — the one thing a
+  # pipeline is for.
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -105,7 +110,11 @@ jobs:
       - name: Tests
         run: pytest --cov=app --cov-report=term-missing --cov-fail-under=70
 
+  # Proves the image still builds on a pull request, where nothing publishes.
+  # On main the publish workflow builds the same thing for real, so building it
+  # here too would be the same work twice for no extra signal.
   docker:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

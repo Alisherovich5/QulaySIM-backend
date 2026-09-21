@@ -7,7 +7,7 @@ name: Publish image
 
 on:
   push:
-    branches: [main, production-cleanup, payme-integration]
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -20,7 +20,14 @@ env:
   IMAGE: ${{ github.repository_owner }}/qulaysim-api
 
 jobs:
+  # The gate. Lint, types, migrations and the whole test suite have to pass
+  # before an image exists at all: an image that fails them is one somebody can
+  # deploy by accident, and the .env on the server names a SHA, not a verdict.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       contents: read
