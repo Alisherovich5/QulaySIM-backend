@@ -488,3 +488,92 @@ class TestGrants:
         # Refused for the missing plan, NOT for the missing reason: a 422 here
         # would mean the field is still required.
         assert response.status_code == 404
+
+
+class TestTwoFactor:
+    async def test_an_enrolled_account_is_asked_for_a_code_not_refused(self) -> None:
+        """428, not 401. The password was right; answering "wrong credentials"
+        would tell somebody holding a correct password that it was wrong, and
+        the login form would never show the code field."""
+        from app.db.models import TOTPDevice
+
+        person = await _staff()
+        async with SessionFactory() as session:
+            session.add(
+                TOTPDevice(
+                    user_id=person.id,
+                    name="phone",
+                    confirmed=True,
+                    key=b"12345678901234567890".hex(),
+                    step=30,
+                    digits=6,
+                    tolerance=1,
+                    drift=0,
+                    last_t=-1,
+                )
+            )
+            await session.commit()
+
+        async with await _client() as client:
+            response = await client.post(
+                f"{PREFIX}/auth/login", json={"email": person.email, "password": PASSWORD}
+            )
+        assert response.status_code == 428
+        assert "qs_bo_refresh" not in response.cookies
+
+    async def test_a_wrong_code_does_not_open_a_session(self) -> None:
+        from app.db.models import TOTPDevice
+
+        person = await _staff()
+        async with SessionFactory() as session:
+            session.add(
+                TOTPDevice(
+                    user_id=person.id,
+                    name="phone",
+                    confirmed=True,
+                    key=b"12345678901234567890".hex(),
+                    step=30,
+                    digits=6,
+                    tolerance=1,
+                    drift=0,
+                    last_t=-1,
+                )
+            )
+            await session.commit()
+
+        async with await _client() as client:
+            response = await client.post(
+                f"{PREFIX}/auth/login",
+                json={"email": person.email, "password": PASSWORD, "code": "000000"},
+            )
+        assert response.status_code == 401
+        assert "qs_bo_refresh" not in response.cookies
+
+    async def test_an_unconfirmed_device_does_not_lock_anybody_out(self) -> None:
+        """django-otp creates the row before the person proves they can read
+        it. Treating that as "2FA is on" would lock out an operator who started
+        enrolling and stopped."""
+        from app.db.models import TOTPDevice
+
+        person = await _staff()
+        async with SessionFactory() as session:
+            session.add(
+                TOTPDevice(
+                    user_id=person.id,
+                    name="half-enrolled",
+                    confirmed=False,
+                    key=b"12345678901234567890".hex(),
+                    step=30,
+                    digits=6,
+                    tolerance=1,
+                    drift=0,
+                    last_t=-1,
+                )
+            )
+            await session.commit()
+
+        async with await _client() as client:
+            response = await client.post(
+                f"{PREFIX}/auth/login", json={"email": person.email, "password": PASSWORD}
+            )
+        assert response.status_code == 200

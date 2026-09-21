@@ -29,6 +29,7 @@ import struct
 import time
 from datetime import UTC, datetime, timedelta
 
+from fastapi import status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -174,7 +175,15 @@ async def _clear_failures(username: str) -> None:
 
 
 class TwoFactorRequiredError(AuthenticationError):
-    """Password was right; the account has a confirmed device and no code came."""
+    """Password was right; the account has a confirmed device and no code came.
+
+    428 rather than 401, because the two mean different things to the login
+    form: 401 is "those credentials are wrong, try again", 428 is "they were
+    right, now show the code field". Answering 401 here would tell somebody
+    holding the correct password that it was wrong.
+    """
+
+    status_code = status.HTTP_428_PRECONDITION_REQUIRED
 
     def __init__(self) -> None:
         super().__init__("Ikki bosqichli kod kerak", code="totp_required")
