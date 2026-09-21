@@ -1,15 +1,11 @@
 name: CI
 
 on:
-  # One branch. The list used to name four because the shop ran off whichever
-  # was newest, and a branch missing from it was a branch nobody tested — which
-  # is the same shape of bug as a test that never runs.
-  push: {branches: [main]}
   pull_request:
-  # Callable, so the publish workflow can make the image wait for it. Two
-  # workflows on the same push run side by side, which meant a failing test
-  # suite and a published image were not mutually exclusive — the one thing a
-  # pipeline is for.
+  # On main this runs as the publish workflow's first job rather than on its
+  # own trigger. Both would fire on the same push, land in the same concurrency
+  # group and cancel each other, and the one that survived was a coin toss —
+  # while the one that matters is the one the image build waits for.
   workflow_call:
 
 concurrency:
