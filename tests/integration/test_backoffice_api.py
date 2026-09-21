@@ -613,3 +613,49 @@ class TestTheShapesTheScreensRead:
         assert response.status_code == 200
         for row in response.json()["items"]:
             assert set(row) == {"id", "chat_id", "label", "is_active"}
+
+
+class TestFiltersActuallyFilter:
+    """A query parameter the endpoint does not declare is silently dropped, and
+    the answer is a 200 with an unfiltered list. Every one of these was spelled
+    differently on the two sides — `state` against `holat`, `status` against
+    `holat` — and every one of them looked like it worked.
+    """
+
+    async def test_an_order_stage_filter_narrows_the_list(self) -> None:
+        person = await _staff()
+        headers = {"Authorization": f"Bearer {_token(person)}"}
+        async with await _client() as client:
+            everything = await client.get(f"{PREFIX}/orders?size=200", headers=headers)
+            delivered = await client.get(
+                f"{PREFIX}/orders?size=200&stage=delivered", headers=headers
+            )
+        assert delivered.status_code == 200
+        rows = delivered.json()["items"]
+        assert all(row["stage"] == "delivered" for row in rows)
+        # And it is a real narrowing, not an empty list that trivially passes.
+        stages = {row["stage"] for row in everything.json()["items"]}
+        if len(stages) > 1:
+            assert len(rows) < len(everything.json()["items"])
+
+    async def test_an_esim_status_filter_narrows_the_list(self) -> None:
+        person = await _staff()
+        headers = {"Authorization": f"Bearer {_token(person)}"}
+        async with await _client() as client:
+            response = await client.get(f"{PREFIX}/esims?size=200&status=expired", headers=headers)
+        assert response.status_code == 200
+        assert all(row["status"] == "expired" for row in response.json()["items"])
+
+    async def test_a_ticket_state_filter_narrows_the_list(self) -> None:
+        person = await _staff()
+        async with SessionFactory() as session:
+            session.add(SupportTicket(email="open@example.com", message="ochiq", state="new"))
+            session.add(SupportTicket(email="shut@example.com", message="yopiq", state="closed"))
+            await session.commit()
+
+        headers = {"Authorization": f"Bearer {_token(person)}"}
+        async with await _client() as client:
+            new = await client.get(f"{PREFIX}/tickets?state=new", headers=headers)
+            closed = await client.get(f"{PREFIX}/tickets?state=closed", headers=headers)
+        assert {row["state"] for row in new.json()["items"]} == {"new"}
+        assert {row["state"] for row in closed.json()["items"]} == {"closed"}

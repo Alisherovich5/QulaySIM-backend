@@ -60,10 +60,10 @@ def _state(ticket: SupportTicket) -> State:
 async def list_tickets(
     session: SessionDep,
     staff: CurrentStaff,
-    holat: str = "",
+    state: str = "",
     limit: int = Query(default=100, ge=1, le=500),
 ) -> dict[str, object]:
-    where = [SupportTicket.state == holat] if holat else []
+    where = [SupportTicket.state == state] if state else []
     rows = (
         await session.execute(
             select(SupportTicket, Staff.first_name, Staff.last_name, Staff.username)

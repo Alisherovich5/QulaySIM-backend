@@ -252,7 +252,7 @@ async def _stage_counts(session: SessionDep) -> dict[str, int]:
 async def list_orders(
     session: SessionDep,
     staff: CurrentStaff,
-    holat: str = "",
+    stage: str = "",
     q: str = "",
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=200),
@@ -294,8 +294,8 @@ async def list_orders(
     )
     extra = await _rows(session, rows)
     items = [_shape(order, extra[order.id]) for order in rows]
-    if holat:
-        items = [item for item in items if item.stage == holat]
+    if stage:
+        items = [item for item in items if item.stage == stage]
     return Paged(
         items=items,
         total=int(total),

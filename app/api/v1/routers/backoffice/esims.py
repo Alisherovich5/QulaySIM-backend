@@ -51,7 +51,7 @@ def _live(status: str, expires_at: datetime | None) -> str:
 async def list_esims(
     session: SessionDep,
     staff: CurrentStaff,
-    holat: str = "",
+    status: str = "",
     q: str = "",
     page: int = Query(default=1, ge=1),
     size: int = Query(default=50, ge=1, le=200),
@@ -111,8 +111,8 @@ async def list_esims(
         )
         for esim, customer, title in rows
     ]
-    if holat:
-        items = [item for item in items if item.status == holat]
+    if status:
+        items = [item for item in items if item.status == status]
     return EsimPage(
         items=items,
         total=int(total),
