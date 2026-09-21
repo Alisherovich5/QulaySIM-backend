@@ -436,6 +436,7 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
     """
     from app.core.config import settings
     from app.integrations.suppliers import SupplierCommittedError, SupplierError, usable_routes_for
+    from app.integrations.wallets import balances, can_cover
 
     if not settings.supplier_calls_enabled:
         logger.info("fulfil.supplier_skipped", order_id=order_id, provider="mock")
@@ -471,6 +472,32 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
                 plans=[item.plan_id for item in order.items],
             )
             return False
+
+        # A wallet that cannot pay for this order goes last.
+        #
+        # The fallback already worked — a supplier that refuses is skipped and
+        # the next one tried — but it learned the wallet was empty by
+        # attempting the purchase: a round trip, a failed row in the ledger and
+        # an alarm in the operations chat, for an order the other supplier
+        # could have taken straight away.
+        #
+        # Reordering, never dropping. A balance we could not read is not a
+        # supplier we may rule out, and a stale one must not be able to make an
+        # order unfulfillable; the purchase attempt stays the authority.
+        if len(routes) > 1:
+            known = balances()
+            affordable = [
+                r for r in routes if can_cover(r.provider, float(r.total_cost_usd), known)
+            ]
+            short = [r for r in routes if r not in affordable]
+            if short:
+                logger.info(
+                    "fulfil.wallet_too_low_for_route",
+                    order_id=order_id,
+                    deprioritised=[r.provider for r in short],
+                    preferred=[r.provider for r in affordable],
+                )
+                routes = affordable + short
 
         last_error: SupplierError | None = None
         for index, route in enumerate(routes):
