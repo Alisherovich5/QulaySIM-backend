@@ -9,7 +9,9 @@ day it is written instead of serving customer emails to the internet.
 
 from __future__ import annotations
 
+import re
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -97,14 +99,12 @@ class TestNothingIsOpen:
         leaked: list[str] = []
         async with await _client() as client:
             for method, path in routes:
-                url = path.format(
-                    order_id=1,
-                    esim_id=1,
-                    customer_id=1,
-                    ticket_id=1,
-                    recipient_id=1,
-                    provider="esimcard",
-                )
+                # Any placeholder, filled with any value: the auth dependency
+                # runs before the route body, so what the id points at never
+                # matters. A regex rather than a keyword list means an endpoint
+                # added next month with a parameter nobody listed is still
+                # checked instead of raising KeyError here.
+                url = re.sub(r"\{[^}]+\}", "1", path)
                 response = await client.request(method, url, json={})
                 if response.status_code != 401:
                     leaked.append(f"{method} {path} -> {response.status_code}")
@@ -777,3 +777,256 @@ class TestTheSessionIsActuallyShort:
         )
         lifetime = payload["exp"] - payload["iat"]
         assert lifetime == 12 * 3600, f"refresh token lives {lifetime / 3600:.0f}h, not 12h"
+
+
+class TestWhatTheDjangoAdminUsedToDo:
+    """The five screens that had no interface at all after Django was retired.
+
+    Each one was reachable in the old admin and nowhere else, so the test that
+    matters for each is the same: the list answers, and the action that changes
+    something actually changes it.
+    """
+
+    async def test_a_promo_code_can_be_switched_off_but_only_by_the_owner(self) -> None:
+        from app.db.models import PromoCode
+
+        async with SessionFactory() as session:
+            code = PromoCode(
+                code=f"TEST{uuid.uuid4().hex[:8].upper()}",
+                discount_type="percent",
+                discount_value=Decimal("10"),
+                is_active=True,
+            )
+            session.add(code)
+            await session.commit()
+            promo_id, text = code.id, code.code
+
+        operator = await _staff(superuser=False)
+        owner = await _staff(superuser=True)
+        async with await _client() as client:
+            # Reading is support work; an operator may do it.
+            listed = await client.get(
+                f"{PREFIX}/promocodes", headers={"Authorization": f"Bearer {_token(operator)}"}
+            )
+            assert listed.status_code == 200
+            assert any(row["code"] == text for row in listed.json()["items"])
+
+            refused = await client.patch(
+                f"{PREFIX}/promocodes/{promo_id}",
+                headers={"Authorization": f"Bearer {_token(operator)}"},
+                json={"is_active": False},
+            )
+            assert refused.status_code == 403, "an operator switched off a discount code"
+
+            allowed = await client.patch(
+                f"{PREFIX}/promocodes/{promo_id}",
+                headers={"Authorization": f"Bearer {_token(owner)}"},
+                json={"is_active": False},
+            )
+            assert allowed.status_code == 204
+
+        async with SessionFactory() as session:
+            assert (await session.get(PromoCode, promo_id)).is_active is False
+
+    async def test_a_duplicate_promo_code_is_refused(self) -> None:
+        owner = await _staff()
+        headers = {"Authorization": f"Bearer {_token(owner)}"}
+        code = f"DUP{uuid.uuid4().hex[:8].upper()}"
+        async with await _client() as client:
+            first = await client.post(
+                f"{PREFIX}/promocodes", headers=headers, json={"code": code, "discount_value": 5}
+            )
+            assert first.status_code == 201
+            second = await client.post(
+                f"{PREFIX}/promocodes",
+                headers=headers,
+                json={"code": code.lower(), "discount_value": 5},
+            )
+        # Lower case, same code. Two rows would mean the second one silently
+        # never applies — checkout matches on one of them.
+        assert second.status_code == 409
+
+    async def test_a_percentage_over_a_hundred_is_refused(self) -> None:
+        owner = await _staff()
+        async with await _client() as client:
+            response = await client.post(
+                f"{PREFIX}/promocodes",
+                headers={"Authorization": f"Bearer {_token(owner)}"},
+                json={
+                    "code": f"FREE{uuid.uuid4().hex[:6]}",
+                    "discount_type": "percent",
+                    "discount_value": 150,
+                },
+            )
+        assert response.status_code == 409, "a 150% discount would pay the customer"
+
+    async def test_a_review_is_invisible_until_somebody_approves_it(self) -> None:
+        from app.db.models import Testimonial
+
+        async with SessionFactory() as session:
+            review = Testimonial(
+                name="Dilnur",
+                location="Toshkent",
+                text="Yaxshi ishladi",
+                rating=5,
+                moderation_status="pending",
+                is_active=False,
+            )
+            session.add(review)
+            await session.commit()
+            review_id = review.id
+
+        person = await _staff()
+        headers = {"Authorization": f"Bearer {_token(person)}"}
+        async with await _client() as client:
+            pending = await client.get(f"{PREFIX}/reviews?state=pending", headers=headers)
+            assert review_id in [row["id"] for row in pending.json()["items"]]
+
+            done = await client.post(
+                f"{PREFIX}/reviews/{review_id}/moderate",
+                headers=headers,
+                json={"state": "approved"},
+            )
+            assert done.status_code == 204
+
+        async with SessionFactory() as session:
+            row = await session.get(Testimonial, review_id)
+            assert row.moderation_status == "approved"
+            # Approved AND on. Two switches for one decision is how a review
+            # ends up approved and still missing from the site.
+            assert row.is_active is True
+
+    async def test_a_pricing_rule_is_owner_only_and_records_who_changed_it(self) -> None:
+        from app.db.models import PricingRule
+
+        async with SessionFactory() as session:
+            # Provider-scoped, not global: the table carries a partial unique
+            # index allowing exactly one global rule, and a test that creates a
+            # second one fails on the constraint rather than on the code.
+            rule = PricingRule(
+                scope="provider",
+                provider=f"test-{uuid.uuid4().hex[:8]}",
+                markup_percent=Decimal("30"),
+                min_margin_usd=Decimal("0"),
+                rounding="charm",
+                is_active=True,
+                updated_at=datetime.now(UTC),
+            )
+            session.add(rule)
+            await session.commit()
+            rule_id = rule.id
+
+        operator = await _staff(superuser=False)
+        owner = await _staff(superuser=True)
+        async with await _client() as client:
+            refused = await client.patch(
+                f"{PREFIX}/pricing-rules/{rule_id}",
+                headers={"Authorization": f"Bearer {_token(operator)}"},
+                json={"markup_percent": 5},
+            )
+            assert refused.status_code == 403, "an operator changed the shop's margin"
+
+            allowed = await client.patch(
+                f"{PREFIX}/pricing-rules/{rule_id}",
+                headers={"Authorization": f"Bearer {_token(owner)}"},
+                json={"markup_percent": 42.5, "note": "sinov"},
+            )
+            assert allowed.status_code == 204
+
+        async with SessionFactory() as session:
+            row = await session.get(PricingRule, rule_id)
+            assert row.markup_percent == Decimal("42.50")
+            assert row.note == "sinov"
+
+    async def test_an_offer_can_be_taken_out_of_the_running(self) -> None:
+        from app.db.models import SupplierOffer
+
+        async with SessionFactory() as session:
+            # A plan that has no offer yet: the table allows one offer per
+            # plan per supplier, so picking the first plan in the catalogue
+            # collides with whatever the importer already wrote.
+            taken = select(SupplierOffer.plan_id).where(SupplierOffer.provider == "esimcard")
+            plan = (
+                (await session.execute(select(Plan).where(Plan.id.not_in(taken)).limit(1)))
+                .scalars()
+                .first()
+            )
+            if plan is None:
+                pytest.skip("every plan already carries an eSIMCard offer")
+            offer = SupplierOffer(
+                plan_id=plan.id,
+                provider="esimcard",
+                package_code=uuid.uuid4().hex[:16],
+                cost_usd=Decimal("3.20"),
+                is_available=True,
+                updated_at=datetime.now(UTC),
+            )
+            session.add(offer)
+            await session.commit()
+            offer_id = offer.id
+
+        owner = await _staff()
+        headers = {"Authorization": f"Bearer {_token(owner)}"}
+        async with await _client() as client:
+            off = await client.patch(
+                f"{PREFIX}/offers/{offer_id}",
+                headers=headers,
+                json={"is_available": False, "reason": "doim rad etadi"},
+            )
+            assert off.status_code == 204
+
+            listed = await client.get(f"{PREFIX}/offers?holat=unavailable", headers=headers)
+            row = next((r for r in listed.json()["items"] if r["id"] == offer_id), None)
+            assert row is not None
+            assert row["unavailable_reason"] == "doim rad etadi"
+
+            # And back on — the reason must not survive, or the row reads as
+            # unavailable for a reason while being available.
+            on = await client.patch(
+                f"{PREFIX}/offers/{offer_id}", headers=headers, json={"is_available": True}
+            )
+            assert on.status_code == 204
+
+        async with SessionFactory() as session:
+            row2 = await session.get(SupplierOffer, offer_id)
+            assert row2.is_available is True
+            assert row2.unavailable_reason == ""
+
+    async def test_referrals_name_both_sides_and_summarise_the_agents(self) -> None:
+        from app.db.models import Referral
+
+        async with SessionFactory() as session:
+            agent = Customer(email=f"agent-{uuid.uuid4().hex[:8]}@example.com", full_name="Agent")
+            invited = Customer(email=f"inv-{uuid.uuid4().hex[:8]}@example.com", full_name="Invited")
+            session.add_all([agent, invited])
+            await session.flush()
+            session.add(
+                Referral(
+                    referrer_id=agent.id,
+                    referred_id=invited.id,
+                    referred_email=invited.email,
+                    status="completed",
+                    reward_code="X",
+                )
+            )
+            await session.commit()
+            agent_email, invited_email = agent.email, invited.email
+
+        person = await _staff()
+        async with await _client() as client:
+            body = (
+                await client.get(
+                    # Searched rather than listed: the development database
+                    # carries a thousand agents from earlier runs, and any
+                    # fixed page size makes this test about the page size.
+                    f"{PREFIX}/referrals?q={agent_email}",
+                    headers={"Authorization": f"Bearer {_token(person)}"},
+                )
+            ).json()
+        row = next((r for r in body["items"] if r["referrer_email"] == agent_email), None)
+        assert row is not None
+        assert row["referred_email"] == invited_email
+        agent = next((a for a in body["agents"] if a["email"] == agent_email), None)
+        assert agent is not None, "the customer who made the invitation is not in the agent list"
+        assert agent["invited"] >= 1
+        assert agent["completed"] >= 1

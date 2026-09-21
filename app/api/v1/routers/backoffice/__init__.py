@@ -11,9 +11,11 @@ from fastapi import APIRouter
 from app.api.v1.routers.backoffice import (
     auth,
     catalogue,
+    content,
     dashboard,
     esims,
     grants,
+    growth,
     money,
     orders,
     people,
@@ -21,7 +23,19 @@ from app.api.v1.routers.backoffice import (
 )
 
 router = APIRouter()
-for module in (auth, dashboard, orders, esims, grants, catalogue, people, money, system):
+for module in (
+    auth,
+    dashboard,
+    orders,
+    esims,
+    grants,
+    catalogue,
+    people,
+    money,
+    system,
+    growth,
+    content,
+):
     router.include_router(module.router)
 
 __all__ = ["router"]

@@ -163,7 +163,11 @@ class PricingRule(Base):
     markup_percent: Mapped[Decimal] = mapped_column(Numeric(6, 2))
     tier_data_mb: Mapped[int | None] = mapped_column(Integer)
     tier_days: Mapped[int | None] = mapped_column(Integer)
-    min_margin_usd: Mapped[Decimal | None] = mapped_column(Numeric(8, 2))
+    # NOT NULL in the database with a default of zero — Django declares it
+    # that way. Mapped as optional here it looked settable to "no floor", and
+    # an insert that left it out was rejected by Postgres rather than by
+    # anything in this repository.
+    min_margin_usd: Mapped[Decimal] = mapped_column(Numeric(8, 2), default=Decimal("0"))
     rounding: Mapped[str] = mapped_column(String(10), default="charm")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     note: Mapped[str] = mapped_column(String(200), default="")
