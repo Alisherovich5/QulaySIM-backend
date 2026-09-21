@@ -580,3 +580,36 @@ class TestTwoFactor:
                 f"{PREFIX}/auth/login", json={"email": person.email, "password": PASSWORD}
             )
         assert response.status_code == 200
+
+
+class TestTheShapesTheScreensRead:
+    """Field-by-field checks on the responses a page would crash without.
+
+    Both of these were found by loading the deployed app in a browser, not by
+    any test: the API answered 200 with a body missing one key, and the page
+    died on `undefined.total`. A 200 is not a passing contract.
+    """
+
+    async def test_the_orders_list_carries_counts_for_the_whole_table(self) -> None:
+        person = await _staff()
+        async with await _client() as client:
+            response = await client.get(
+                f"{PREFIX}/orders?size=1", headers={"Authorization": f"Bearer {_token(person)}"}
+            )
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body) == {"items", "total", "page", "pages", "counts"}
+        assert {"total", "pending", "delivered", "failed"} <= set(body["counts"])
+        # Whole-table, not this page: the tiles say how much work there is, and
+        # a count of the fifty rows on screen answers a different question.
+        assert body["counts"]["total"] == body["total"]
+
+    async def test_a_telegram_recipient_says_only_what_the_table_holds(self) -> None:
+        person = await _staff()
+        async with await _client() as client:
+            response = await client.get(
+                f"{PREFIX}/telegram", headers={"Authorization": f"Bearer {_token(person)}"}
+            )
+        assert response.status_code == 200
+        for row in response.json()["items"]:
+            assert set(row) == {"id", "chat_id", "label", "is_active"}

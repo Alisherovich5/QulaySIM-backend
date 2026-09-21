@@ -94,6 +94,7 @@ class Paged(BaseModel):
     total: int
     page: int
     pages: int
+    counts: dict[str, int]
 
 
 def code_of(order: Order) -> str:
@@ -212,6 +213,41 @@ def _shape(order: Order, extra: dict[str, object]) -> OrderRow:
     )
 
 
+async def _stage_counts(session: SessionDep) -> dict[str, int]:
+    """How many orders are in each of the four states, over the whole table.
+
+    The tiles above the list must not count only the page being looked at — the
+    number an operator acts on is "how many are stuck", not "how many are stuck
+    among the fifty I can see". Derived in SQL for the same reason the list is:
+    delivery is recorded in another table, so `status` alone cannot say it.
+    """
+    delivered = select(ESIM.order_id).where(ESIM.order_id == Order.id)
+    topup_open = select(OrderItem.id).where(
+        OrderItem.order_id == Order.id,
+        OrderItem.esim_id.isnot(None),
+        OrderItem.topup_applied_at.is_(None),
+    )
+    total, cancelled, paid, done = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count().filter(Order.status == "cancelled"),
+                func.count().filter(Order.status == "paid"),
+                func.count().filter(
+                    Order.status == "paid", delivered.exists(), ~topup_open.exists()
+                ),
+            )
+        )
+    ).one()
+    return {
+        "total": int(total),
+        "failed": int(cancelled),
+        "delivered": int(done),
+        # Paid and not yet delivered — the row that needs somebody.
+        "pending": int(paid) - int(done),
+    }
+
+
 @router.get("/orders", response_model=Paged)
 async def list_orders(
     session: SessionDep,
@@ -260,7 +296,13 @@ async def list_orders(
     items = [_shape(order, extra[order.id]) for order in rows]
     if holat:
         items = [item for item in items if item.stage == holat]
-    return Paged(items=items, total=int(total), page=page, pages=max(1, -(-int(total) // size)))
+    return Paged(
+        items=items,
+        total=int(total),
+        page=page,
+        pages=max(1, -(-int(total) // size)),
+        counts=await _stage_counts(session),
+    )
 
 
 async def _load(session: SessionDep, order_id: int) -> Order:
