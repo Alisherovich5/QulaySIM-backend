@@ -31,13 +31,27 @@ from app.db.models.orders import (
     SupplierPurchase,
     TelegramRecipient,
 )
+from app.db.models.staff import (
+    AccessFailureLog,
+    AccessLog,
+    CatalogSyncRun,
+    ComplimentaryGrant,
+    RowChange,
+    Staff,
+    TOTPDevice,
+)
+from app.db.models.support import SupportNote, SupportTicket
 
 __all__ = [
     "ESIM",
     "FAQ",
+    "AccessFailureLog",
+    "AccessLog",
     "AtmosTransaction",
     "Banner",
     "Benefit",
+    "CatalogSyncRun",
+    "ComplimentaryGrant",
     "Country",
     "Customer",
     "Device",
@@ -59,9 +73,14 @@ __all__ = [
     "Referral",
     "ReferralStatus",
     "Region",
+    "RowChange",
     "SocialAccount",
+    "Staff",
     "SupplierOffer",
     "SupplierPurchase",
+    "SupportNote",
+    "SupportTicket",
+    "TOTPDevice",
     "TelegramRecipient",
     "Testimonial",
 ]

@@ -37,6 +37,11 @@ COPY --chown=app:app app ./app
 # Operational entry points: seeding and the supplier catalogue sync have to be
 # runnable inside the container, not only from a developer's checkout.
 COPY --chown=app:app scripts ./scripts
+# Migrations for the tables this service owns. Shipped in the image so the
+# deploy runs `alembic upgrade head` from the same build as the code, rather
+# than from whatever a checkout on the server happens to hold.
+COPY --chown=app:app alembic.ini ./alembic.ini
+COPY --chown=app:app alembic ./alembic
 
 # Celery beat writes its schedule to disk. The working directory is root-owned
 # and the container runs unprivileged, so give beat somewhere it can write.

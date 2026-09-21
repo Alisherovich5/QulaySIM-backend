@@ -29,6 +29,9 @@ dependencies = [
     "structlog>=24.1",
     "orjson>=3.10",
     "cryptography>=50.0",   # PYSEC-2026-3552
+    # Schema migrations for the tables this service owns. Django still owns the
+    # ones it created; nothing here touches those.
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

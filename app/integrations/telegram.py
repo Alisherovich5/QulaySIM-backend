@@ -134,6 +134,50 @@ async def send_html(
         raise UpstreamError("Telegram delivery failed") from last_error
 
 
+async def send_photo(
+    image: bytes,
+    *,
+    caption: str,
+    filename: str = "qr.png",
+    targets: list[str] | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> None:
+    """Post an image to the operations chat.
+
+    This exists for one job: getting a QR code onto the phone of the person who
+    is going to hand it over. The customer reads their QR in their account on
+    the site; when they cannot — the account is under a different address, the
+    order was a manual grant, they are on the phone right now — the operator
+    needs the picture where they are already typing, which is Telegram.
+
+    The caption is escaped here because it carries a customer's email and plan
+    title, i.e. text that came from outside.
+    """
+    targets = targets if targets is not None else await chat_ids()
+    if not settings.telegram_bot_token or not targets:
+        raise ServiceUnavailableError("Telegram is not configured")
+
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendPhoto"
+    delivered = 0
+    last_error: Exception | None = None
+    for target in targets:
+        try:
+            response = await (client or get_client()).post(
+                url,
+                data={"chat_id": target, "caption": caption[:1024], "parse_mode": "HTML"},
+                files={"photo": (filename, image, "image/png")},
+                timeout=settings.telegram_timeout_seconds,
+            )
+            response.raise_for_status()
+            delivered += 1
+        except Exception as exc:  # noqa: BLE001 - reported per recipient below
+            last_error = exc
+            logger.warning("telegram.photo_failed_for_chat", chat_id=target, error=str(exc))
+
+    if delivered == 0:
+        raise UpstreamError("Telegram photo delivery failed") from last_error
+
+
 def send_html_blocking(text: str) -> None:
     """`send_html`, for a Celery task — which has no event loop of its own.
 

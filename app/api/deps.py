@@ -19,6 +19,20 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=Fals
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 
+def _customer_id(subject: object) -> int:
+    """The customer id a token's subject names.
+
+    Backoffice tokens are signed with the same key and carry `staff:<id>`, so
+    this has to refuse rather than parse: `int("staff:44")` raised ValueError
+    and a member of staff pointing their token at a customer endpoint got a 500
+    where they should have got a 401.
+    """
+    try:
+        return int(str(subject))
+    except ValueError as exc:
+        raise AuthenticationError("Could not validate credentials") from exc
+
+
 async def get_current_customer(
     session: SessionDep,
     token: Annotated[str | None, Depends(oauth2_scheme)],
@@ -26,7 +40,7 @@ async def get_current_customer(
     if not token:
         raise AuthenticationError("Not authenticated")
     payload = decode_token(token, "access")
-    customer = await customer_repo.get_by_id(session, int(payload["sub"]))
+    customer = await customer_repo.get_by_id(session, _customer_id(payload["sub"]))
     if customer is None or not customer.is_active:
         raise AuthenticationError("Could not validate credentials")
     return customer
@@ -61,7 +75,11 @@ async def get_optional_customer(
         # visitor as anonymous and price their cart. Enumerating the failure
         # modes would add ways to get a 500 on a public page, not safety.
         return None
-    customer = await customer_repo.get_by_id(session, int(payload["sub"]))
+    try:
+        customer_id = _customer_id(payload["sub"])
+    except AuthenticationError:
+        return None
+    customer = await customer_repo.get_by_id(session, customer_id)
     return customer if customer is not None and customer.is_active else None
 
 

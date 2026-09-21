@@ -86,6 +86,16 @@ jobs:
           pip install -r requirements.txt
           python manage.py migrate --noinput
 
+      # Then ours. Django owns the tables it created; this repo owns the
+      # support tables and brings the hand-made audit/TOTP objects under
+      # version control, so CI tests the schema production actually has.
+      - name: Apply our migrations
+        env:
+          DATABASE_URL: postgresql+asyncpg://fastsim:fastsim@localhost:5432/fastsim
+          JWT_SECRET: ci-only-secret-value-at-least-32-characters
+          REDIS_URL: redis://localhost:6379/0
+        run: alembic upgrade head
+
       # The integration tests need a catalogue to sell from. Without this they
       # fail with "seed the catalogue first", which looks like a broken test and
       # is really a missing fixture — twelve failures that said nothing.

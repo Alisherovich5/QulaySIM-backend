@@ -15,6 +15,7 @@ from app.api.v1.routers import (
     account,
     atmos,
     auth,
+    backoffice,
     catalog,
     checkout,
     content,
@@ -143,6 +144,7 @@ def create_app() -> FastAPI:
         rum.router,
         support.router,
         webhooks.router,
+        backoffice.router,
     ):
         app.include_router(router)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, status
 
+from app.api.deps import SessionDep
 from app.core.config import settings
 from app.core.ratelimit import RateLimit, client_ip
 from app.schemas.content import SupportMessageIn, SupportMessageOut
@@ -16,8 +17,11 @@ router = APIRouter(prefix="/api/support", tags=["support"])
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(RateLimit("support", settings.rate_limit_support))],
 )
-async def create_support_message(payload: SupportMessageIn, request: Request) -> SupportMessageOut:
+async def create_support_message(
+    payload: SupportMessageIn, request: Request, session: SessionDep
+) -> SupportMessageOut:
     await service.submit_support_message(
+        session=session,
         name=payload.name,
         email=payload.email,
         phone=payload.phone,
