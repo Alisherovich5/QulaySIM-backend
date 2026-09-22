@@ -61,9 +61,7 @@ class TestASupplierThatDidNotAnswer:
 
         assert wallets.balances() == {"esimcard": 0.24, "esimaccess": 45.48}
 
-    def test_stays_unknown_when_the_watch_has_nothing_either(
-        self, redis_with, monkeypatch
-    ) -> None:
+    def test_stays_unknown_when_the_watch_has_nothing_either(self, redis_with, monkeypatch) -> None:
         # Nothing recorded, so nothing to fall back to — and unknown still
         # means attempt, because a paid order must not be stranded by a
         # monitoring gap.
@@ -72,9 +70,7 @@ class TestASupplierThatDidNotAnswer:
 
         assert wallets.balances() == {"esimcard": None}
 
-    def test_only_the_provider_that_failed_is_substituted(
-        self, redis_with, monkeypatch
-    ) -> None:
+    def test_only_the_provider_that_failed_is_substituted(self, redis_with, monkeypatch) -> None:
         # The live number wins wherever there is one: the watch is a fallback,
         # never an override.
         redis_with(watch(esimcard=0.24, esimaccess=10.00))
@@ -94,9 +90,7 @@ class TestASupplierThatDidNotAnswer:
 class TestTheLiveCacheStillWins:
     def test_a_warm_cache_is_not_refetched(self, redis_with, monkeypatch) -> None:
         redis_with({wallets.LIVE_KEY: json.dumps({"esimcard": 7.0}).encode()})
-        monkeypatch.setattr(
-            wallets, "fetch_balances", lambda: pytest.fail("should not have asked")
-        )
+        monkeypatch.setattr(wallets, "fetch_balances", lambda: pytest.fail("should not have asked"))
 
         assert wallets.balances() == {"esimcard": 7.0}
 
