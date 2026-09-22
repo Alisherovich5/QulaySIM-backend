@@ -95,7 +95,20 @@ def _redis() -> Any:
 
 
 def balances() -> dict[str, float | None]:
-    """Both wallets, in dollars, for a synchronous caller. Asks if the cache is cold."""
+    """Both wallets, in dollars, for a synchronous caller. Asks if the cache is cold.
+
+    A supplier that does not answer falls back to whatever the watch last
+    recorded, rather than to "unknown". The difference is worth the extra read:
+    unknown means attempt the purchase, and a worker restarted with a cold cache
+    asks the supplier live — so one timed-out balance read turned into a burst
+    of six refused orders at 08:45 on 22 September, for a wallet the watch had
+    correctly recorded as holding 24 cents ten minutes earlier.
+
+    A number from the watch is at most WATCH_TTL old, and being wrong with it
+    costs one five-minute rescue cycle, because by the next sweep the watch has
+    refreshed. Being wrong the other way costs a round trip, a failed row in the
+    ledger and an alarm, every time.
+    """
     client = None
     try:
         client = _redis()
@@ -108,12 +121,40 @@ def balances() -> dict[str, float | None]:
 
     found = fetch_balances()
 
+    if any(value is None for value in found.values()):
+        recorded = _recorded()
+        for provider, value in found.items():
+            if value is None and provider in recorded:
+                found[provider] = recorded[provider]
+                logger.info("wallet.fell_back_to_watch", provider=provider)
+
     if client is not None:
         try:
             client.setex(LIVE_KEY, LIVE_TTL, json.dumps(found))
         except Exception as exc:  # noqa: BLE001
             logger.warning("wallet.cache_write_failed", error=str(exc))
     return found
+
+
+def _recorded() -> dict[str, float]:
+    """What the watch last wrote. Empty when there is nothing to fall back to."""
+    try:
+        raw = _redis().get(WATCH_KEY)
+    except Exception:  # noqa: BLE001 - no fallback is the same as no record
+        return {}
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(loaded, dict):
+        return {}
+    return {
+        key: float(value)
+        for key, value in loaded.items()
+        if isinstance(value, int | float) and not isinstance(value, bool)
+    }
 
 
 async def wallet_balances() -> dict[str, float | None]:
