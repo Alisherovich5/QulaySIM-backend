@@ -8,6 +8,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import SessionDep
 from app.api.v1.routers.backoffice.deps import CurrentStaff
@@ -181,6 +182,16 @@ async def purchases(
     }
 
 
+class Day(BaseModel):
+    """One day of the period. Zero-filled, so a quiet Tuesday is a gap in the
+    line rather than a missing point the chart would draw straight through."""
+
+    date: str
+    orders: int
+    revenue_uzs: float
+    profit_uzs: float
+
+
 class Report(BaseModel):
     period_days: int
     orders: int
@@ -189,6 +200,7 @@ class Report(BaseModel):
     profit_uzs: float
     new_customers: int
     top: list[dict[str, object]]
+    daily: list[Day]
 
 
 @router.get("/reports", response_model=Report)
@@ -249,6 +261,7 @@ async def report(
 
     return Report(
         period_days=days,
+        daily=await _daily(session, since, days, rate),
         orders=int(order_count),
         revenue_uzs=float(revenue),
         supplier_cost_usd=float(cost),
@@ -259,3 +272,65 @@ async def report(
             for name, count, amount in top
         ],
     )
+
+
+async def _daily(session: AsyncSession, since: datetime, days: int, rate: Decimal) -> list[Day]:
+    """The period day by day, so the page can show a shape and not just a sum.
+
+    Four totals tell you this week was worth six million so'm. They cannot tell
+    you whether that is a good week, which is the only question somebody opens
+    a reports page with — and the answer is in whether the line is climbing.
+
+    Grouped in SQL rather than in Python over the order rows: ninety days of
+    orders is a list nobody needs in memory to draw ninety points. Cost is
+    converted at today's rate, the same one the totals use, so a day's profit
+    here and the period's profit above cannot disagree.
+    """
+    rows = (
+        await session.execute(
+            select(
+                func.date(Order.paid_at).label("day"),
+                func.count(),
+                func.coalesce(func.sum(Order.amount_uzs), 0),
+            )
+            .where(
+                Order.status == "paid",
+                Order.paid_at >= since,
+                Order.is_complimentary.is_(False),
+            )
+            .group_by(func.date(Order.paid_at))
+        )
+    ).all()
+    costs = (
+        await session.execute(
+            select(
+                func.date(Order.paid_at).label("day"),
+                func.coalesce(func.sum(OrderItem.unit_cost), 0),
+            )
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(Order.status == "paid", Order.paid_at >= since)
+            .group_by(func.date(Order.paid_at))
+        )
+    ).all()
+
+    by_day = {str(day): (int(count), Decimal(str(amount))) for day, count, amount in rows}
+    cost_by_day = {str(day): Decimal(str(cost)) for day, cost in costs}
+
+    # Every day in the window, present or not. A chart that skips empty days
+    # draws a straight line across a weekend nobody sold anything on and calls
+    # it steady trade.
+    start = (since + timedelta(days=1)).date()
+    out: list[Day] = []
+    for offset in range(days):
+        stamp = str(start + timedelta(days=offset))
+        count, revenue = by_day.get(stamp, (0, Decimal("0")))
+        cost = cost_by_day.get(stamp, Decimal("0"))
+        out.append(
+            Day(
+                date=stamp,
+                orders=count,
+                revenue_uzs=float(revenue),
+                profit_uzs=float(revenue - cost * rate),
+            )
+        )
+    return out
