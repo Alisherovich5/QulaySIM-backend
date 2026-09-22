@@ -505,7 +505,15 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
             # wallet. The order stays paid and undelivered, the rescue keeps
             # sweeping it up every five minutes for free, and the wallet watch
             # is what asks a person to fix it.
-            logger.error(
+            # Loud the first time, quiet while it stays true. The rescue sweeps
+            # this order every five minutes and will keep doing so until a
+            # person tops the wallet up, which is 288 lines a day saying the
+            # same thing — and the whole reason this branch exists is that one
+            # message repeated that often is how a real error goes unread. A
+            # person is told by the wallet watch and by the rescue's own alert;
+            # this line is forensic, so it shouts once and then whispers.
+            report = logger.error if _first_block(order_id) else logger.info
+            report(
                 "fulfil.no_affordable_wallet",
                 order_id=order_id,
                 providers=[r.provider for r in routes],
@@ -577,6 +585,31 @@ def _place_supplier_order(order_id: int, *, attempt: int) -> bool:
         if last_error is not None:
             raise last_error
         return False
+
+
+#: How long one blocked order stays quiet in the log. An hour rather than the
+#: alert's day: this is for whoever is reading the log at the time, and an hour
+#: is short enough that a fresh window still shows the order is stuck.
+BLOCK_SILENCE = 60 * 60
+
+
+def _first_block(order_id: int) -> bool:
+    """Whether this order's wallet problem is news rather than state.
+
+    Redis rather than a column, for the same reason the rescue's alert uses it:
+    the marker is about the message, not about the order, and it should
+    disappear on its own. A Redis we cannot reach reports everything, because a
+    repeated line is a smaller problem than a missing one.
+    """
+    import redis
+
+    from app.core.config import settings
+
+    try:
+        client = redis.Redis.from_url(str(settings.redis_url))
+        return bool(client.set(f"fulfil:blocked:{order_id}", b"1", ex=BLOCK_SILENCE, nx=True))
+    except Exception:  # noqa: BLE001 - never hide the line because Redis is down
+        return True
 
 
 def _pinned_provider(session: object, order_id: int) -> str | None:

@@ -220,3 +220,54 @@ class TestItStillTriesWhenItMightWork:
         assert provisioning._place_supplier_order(141, attempt=0) is True
         assert wired["suppliers"]["esimcard"].calls == 1
         assert wired["suppliers"]["esimaccess"].calls == 0
+
+
+class TestItSaysItOnceNotEveryFiveMinutes:
+    """The blocked order is swept every five minutes and cannot be fulfilled
+    until a person tops the wallet up. That is 288 identical error lines a day,
+    and burying real errors under a repeated one is the problem this whole
+    branch was added to stop — solving it by producing a different flood would
+    be the same mistake with a new name."""
+
+    def test_the_first_one_is_an_error(self, wired, monkeypatch) -> None:
+        seen: list[str] = []
+        monkeypatch.setattr(provisioning, "_first_block", lambda _oid: True)
+        monkeypatch.setattr(provisioning.logger, "error", lambda event, **_: seen.append(event))
+        wired["state"]["routes"] = [route("esimcard", "3.94")]
+        wired["state"]["balances"] = {"esimcard": 0.24}
+
+        provisioning._place_supplier_order(141, attempt=0)
+        assert seen == ["fulfil.no_affordable_wallet"]
+
+    def test_the_repeat_is_not(self, wired, monkeypatch) -> None:
+        errors: list[str] = []
+        infos: list[str] = []
+        monkeypatch.setattr(provisioning, "_first_block", lambda _oid: False)
+        monkeypatch.setattr(provisioning.logger, "error", lambda event, **_: errors.append(event))
+        monkeypatch.setattr(provisioning.logger, "info", lambda event, **_: infos.append(event))
+        wired["state"]["routes"] = [route("esimcard", "3.94")]
+        wired["state"]["balances"] = {"esimcard": 0.24}
+
+        provisioning._place_supplier_order(141, attempt=0)
+        assert errors == []
+        assert "fulfil.no_affordable_wallet" in infos
+
+    def test_the_decision_is_still_the_same_either_way(self, wired, monkeypatch) -> None:
+        """Quieter, not softer: the supplier is still never called."""
+        wired["suppliers"]["esimcard"] = RecordingSupplier("esimcard", refuses=True)
+        monkeypatch.setattr(provisioning, "_first_block", lambda _oid: False)
+        wired["state"]["routes"] = [route("esimcard", "3.94")]
+        wired["state"]["balances"] = {"esimcard": 0.24}
+
+        assert provisioning._place_supplier_order(141, attempt=0) is False
+        assert wired["suppliers"]["esimcard"].calls == 0
+
+    def test_a_redis_we_cannot_reach_reports_everything(self, monkeypatch) -> None:
+        """A repeated line is a smaller problem than a missing one."""
+        import redis
+
+        def broken(_url):
+            raise OSError("redis is gone")
+
+        monkeypatch.setattr(redis.Redis, "from_url", broken)
+        assert provisioning._first_block(141) is True
