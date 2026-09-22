@@ -250,6 +250,102 @@ def from_esimcard() -> list[Offer]:
     return offers
 
 
+# Key names suppliers actually use, in the order we prefer them. A catalogue
+# endpoint is never documented the same way twice, so guessing from key names
+# beats reading a PDF: the guess is printed for review, never applied blindly.
+_GUESSES: dict[str, tuple[str, ...]] = {
+    "price": ("price", "wholesale_price", "cost", "amount", "retail_price", "net_price"),
+    "days": ("days", "day", "validity", "duration", "period", "validity_days", "periodnum"),
+    "bytes": ("volume", "data", "bytes", "data_quantity", "datasize", "quota", "traffic"),
+    "country": ("location", "country", "iso", "countrycode", "region", "coverage"),
+    "title": ("name", "title", "package", "description", "label", "slug"),
+}
+
+
+def _walk(payload: Any, path: str = "") -> list[tuple[str, list]]:
+    """Every array of objects in the response, deepest last."""
+    found: list[tuple[str, list]] = []
+    if isinstance(payload, list):
+        if payload and isinstance(payload[0], dict):
+            found.append((path or "(ildiz)", payload))
+    elif isinstance(payload, dict):
+        for key, value in payload.items():
+            found += _walk(value, f"{path}.{key}" if path else key)
+    return found
+
+
+def _guess(keys: list[str]) -> dict[str, str]:
+    lowered = {key.lower().replace("_", ""): key for key in keys}
+    mapping = {}
+    for field, candidates in _GUESSES.items():
+        for candidate in candidates:
+            hit = lowered.get(candidate.replace("_", ""))
+            if hit:
+                mapping[field] = hit
+                break
+    return mapping
+
+
+def discover(url: str, headers: dict[str, str], method: str = "GET", body: Any = None) -> int:
+    """Print a catalogue's shape and a spec skeleton to start from."""
+    response = httpx.request(
+        method,
+        _expand(url),
+        headers={k: _expand(v) for k, v in headers.items()},
+        json=body,
+        timeout=60,
+    )
+    content_type = response.headers.get("content-type", "?")
+    print(f"HTTP {response.status_code}  {len(response.content)} bayt  {content_type}")
+    try:
+        payload = response.json()
+    except ValueError:
+        print("JSON emas. Javob boshi:")
+        print(response.text[:400])
+        return 1
+
+    arrays = _walk(payload)
+    if not arrays:
+        print("Obyektlar massivi topilmadi. To'liq javob:")
+        print(json.dumps(payload, indent=2, ensure_ascii=False)[:1500])
+        return 1
+
+    path, rows = max(arrays, key=lambda pair: len(pair[1]))
+    sample = rows[0]
+    print(f"\nEng katta massiv: {path}  ({len(rows)} qator)\n")
+    print("Birinchi qator:")
+    for key, value in sample.items():
+        shown = json.dumps(value, ensure_ascii=False)
+        print(f"  {key:<24} {shown[:70]}")
+
+    mapping = _guess(list(sample.keys()))
+    missing = [field for field in ("price", "days") if field not in mapping]
+    print("\nTaxmin qilingan moslik:")
+    for field in _GUESSES:
+        print(f"  {field:<10} -> {mapping.get(field, "??? qo'lda toping")}")
+    if missing:
+        print(f"\nDIQQAT: {', '.join(missing)} topilmadi — spetsifikatsiyani qo'lda to'ldiring.")
+
+    print("\nBoshlang'ich spetsifikatsiya:")
+    print(
+        json.dumps(
+            {
+                "name": "yangi-taminotchi",
+                "url": url,
+                "method": method,
+                "headers": headers,
+                "list_path": "" if path == "(ildiz)" else path,
+                "fields": mapping,
+                "price_scale": 1,
+                "unlimited_when": {"field": mapping.get("bytes", "volume"), "equals": -1},
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
 def report(offers: list[Offer], country: str | None) -> None:
     if country:
         offers = [o for o in offers if o.country == country.upper()]
@@ -314,11 +410,31 @@ def main() -> int:
     parser.add_argument(
         "--spec-help", action="store_true", help="spetsifikatsiya namunasini chop eting"
     )
+    parser.add_argument(
+        "--discover",
+        metavar="URL",
+        help="katalog shaklini aniqlash va spetsifikatsiya taklif qilish",
+    )
+    parser.add_argument(
+        "--header",
+        action="append",
+        default=[],
+        metavar="K:V",
+        help="--discover uchun sarlavha; ${VAR} muhitdan olinadi",
+    )
     args = parser.parse_args()
 
     if args.spec_help:
         print(SPEC_HELP)
         return 0
+    if args.discover:
+        headers = {}
+        for raw in args.header:
+            key, _, value = raw.partition(":")
+            if not value:
+                parser.error(f"--header '{raw}' K:V shaklida emas")
+            headers[key.strip()] = value.strip()
+        return discover(args.discover, headers)
     if not args.spec and not args.baseline:
         parser.error("--baseline yoki --spec kerak")
 
