@@ -160,7 +160,13 @@ async def telegram_config() -> TelegramConfigOut:
     built once and deployed to whatever a server's .env says, so a build-time
     constant would hard-code one deployment's bot into every one of them.
     """
-    return TelegramConfigOut(bot_username=settings.telegram_login_bot_username)
+    token = settings.telegram_login_token
+    return TelegramConfigOut(
+        bot_username=settings.telegram_login_bot_username,
+        # Everything before the colon. Public by design, and never the half
+        # after it, which is what signatures are checked against.
+        bot_id=token.split(":", 1)[0] if ":" in token else "",
+    )
 
 
 @router.post(

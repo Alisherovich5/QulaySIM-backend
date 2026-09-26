@@ -170,9 +170,14 @@ class TelegramConfigOut(APIModel):
     """Whether the Telegram button can be drawn, and for which bot.
 
     An empty username means the deployment has not set one up, and the page
-    draws nothing: a button that opens a widget bound to no domain fails after
-    the person has already committed to it, which is worse than never offering
-    the option.
+    draws nothing: a button that sends somebody to a bot bound to no domain
+    fails after they have already committed to it, which is worse than never
+    having offered.
+
+    `bot_id` is the numeric half of the token and is public — Telegram prints
+    it in its own widget markup. It is what the authorisation URL is keyed on,
+    and deriving it here keeps the token itself on the server.
     """
 
     bot_username: str
+    bot_id: str
