@@ -226,6 +226,32 @@ class Settings(BaseSettings):
     telegram_chat_id: str = ""
     telegram_timeout_seconds: int = 10
 
+    # Sign in with Telegram.
+    #
+    # The username is what the widget needs and what decides whether the button
+    # is offered at all: an unset username means the feature is simply not on,
+    # which is the right default for a deployment whose bot has no domain bound
+    # in BotFather. Offering a button that cannot work is worse than offering
+    # none.
+    #
+    # The token may be the alert bot's or a separate login bot's. They are the
+    # same kind of secret and the login one is only ever used to verify a
+    # signature, never to send anything — but they are kept apart so that
+    # rotating the bot that messages the owner does not silently lock every
+    # Telegram customer out.
+    telegram_login_bot_username: str = ""
+    telegram_login_bot_token: str = ""
+
+    @property
+    def telegram_login_token(self) -> str:
+        """The token logins are verified against, falling back to the alert bot.
+
+        A deployment that runs one bot for both should not have to write the
+        same secret twice; a deployment that splits them sets the login one and
+        this never looks at the other.
+        """
+        return self.telegram_login_bot_token or self.telegram_bot_token
+
     @field_validator("jwt_secret")
     @classmethod
     def _reject_placeholder_secret(cls, v: str) -> str:

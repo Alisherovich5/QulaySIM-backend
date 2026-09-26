@@ -25,6 +25,8 @@ from app.schemas.auth import (
     ProvidersOut,
     RefreshIn,
     RegisterIn,
+    TelegramConfigOut,
+    TelegramIn,
     TokenOut,
 )
 from app.services import auth as auth_service
@@ -123,6 +125,42 @@ async def google(payload: GoogleIn, session: SessionDep, response: Response) -> 
     """
     customer = await auth_service.login_with_google(session, credential=payload.credential)
     return _issue(response, customer)
+
+
+@router.post(
+    "/telegram",
+    response_model=TokenOut,
+    # Same ceiling as the other two. Verification here is local arithmetic
+    # rather than a network call, which makes it cheaper to run and therefore
+    # cheaper to abuse: an unthrottled endpoint that does an HMAC per request is
+    # a CPU sink anybody can point at us.
+    dependencies=[Depends(RateLimit("telegram", settings.rate_limit_login))],
+)
+async def telegram(payload: TelegramIn, session: SessionDep, response: Response) -> TokenOut:
+    """Exchange a signed Telegram login for our own session.
+
+    Two outcomes beyond the obvious. 401 for anything that fails verification,
+    with the reason logged and not returned. And 422 `telegram_email_required`
+    for a Telegram account we have never seen: the signature was good and we
+    know who they are, but Telegram sends no address and the account is filed
+    under one. The page asks, then posts the same payload back with `email` —
+    the login is still inside its five-minute window, so nothing is re-signed.
+    """
+    customer = await auth_service.login_with_telegram(
+        session, data=payload.signed_fields(), email=payload.email
+    )
+    return _issue(response, customer)
+
+
+@router.get("/telegram/config", response_model=TelegramConfigOut)
+async def telegram_config() -> TelegramConfigOut:
+    """Whether to offer the button, and which bot it belongs to.
+
+    Read at runtime rather than baked into the bundle: the storefront image is
+    built once and deployed to whatever a server's .env says, so a build-time
+    constant would hard-code one deployment's bot into every one of them.
+    """
+    return TelegramConfigOut(bot_username=settings.telegram_login_bot_username)
 
 
 @router.post(

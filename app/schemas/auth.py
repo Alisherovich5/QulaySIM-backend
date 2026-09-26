@@ -124,3 +124,55 @@ class GoogleFailureIn(APIModel):
     """A report that Google sign-in failed before any credential existed."""
 
     reason: GoogleFailureReason
+
+
+class TelegramIn(APIModel):
+    """What the Telegram login widget hands the browser, posted back to us.
+
+    The fields are Telegram's own names because the hash is computed over them:
+    renaming one here would mean rebuilding the signed string from a different
+    vocabulary, and the first mismatch would be a login that verifies for
+    nobody.
+
+    `email` is ours, not Telegram's. It is absent on the first call and present
+    on the second, after the page has asked — see TelegramEmailRequiredError.
+    """
+
+    id: str = Field(min_length=1, max_length=32)
+    hash: str = Field(min_length=64, max_length=64)
+    auth_date: str = Field(min_length=1, max_length=20)
+    first_name: str = Field(default="", max_length=128)
+    last_name: str = Field(default="", max_length=128)
+    username: str = Field(default="", max_length=64)
+    photo_url: str = Field(default="", max_length=512)
+    email: EmailStr | None = None
+
+    def signed_fields(self) -> dict[str, str]:
+        """Everything Telegram signed, and nothing of ours.
+
+        `email` is excluded deliberately: it was never part of the signature,
+        and passing it to the verifier would make a genuine login fail the
+        moment somebody supplies one.
+        """
+        out = {
+            "id": self.id,
+            "hash": self.hash,
+            "auth_date": self.auth_date,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "username": self.username,
+            "photo_url": self.photo_url,
+        }
+        return {k: v for k, v in out.items() if v}
+
+
+class TelegramConfigOut(APIModel):
+    """Whether the Telegram button can be drawn, and for which bot.
+
+    An empty username means the deployment has not set one up, and the page
+    draws nothing: a button that opens a widget bound to no domain fails after
+    the person has already committed to it, which is worse than never offering
+    the option.
+    """
+
+    bot_username: str

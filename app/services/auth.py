@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC
 
+from fastapi import status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -283,3 +284,126 @@ async def logout(refresh_token: str | None) -> None:
     from app.core.config import settings
 
     await revoke(str(payload["jti"]), settings.refresh_token_ttl_days * 86400)
+
+
+class TelegramEmailRequiredError(DomainError):
+    """A Telegram account we have never seen, and no address to file it under.
+
+    Not an authentication failure: the signature was good and we know who this
+    is. It is the one thing Telegram cannot tell us. The front end answers it
+    by asking once and posting the same payload back with an address; the
+    payload is still inside its freshness window, so nothing has to be re-signed.
+
+    422 rather than 401, and with its own `code`, because the two mean opposite
+    things to the page: 401 says stop and offer another way in, this says carry
+    on and ask one question. A front end that could not tell them apart would
+    show "could not verify your Telegram account" to somebody whose Telegram
+    account verified perfectly.
+    """
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    code = "telegram_email_required"
+
+
+async def login_with_telegram(
+    session: AsyncSession, *, data: dict[str, str], email: str | None = None
+) -> Customer:
+    """Sign in (or sign up) with a verified Telegram identity.
+
+    The same three cases as Google, with one difference that shapes everything:
+    **Telegram sends no e-mail.** Google's second case — unknown provider id,
+    known address — is what lets a password account and a social account become
+    one account instead of two. Without an address there is nothing to match on,
+    so a first-time Telegram user is asked for one rather than filed under a
+    synthetic address nobody can ever recover.
+
+    That choice is worth defending. `customers_customer.email` is the key a
+    person gets back in with: this shop sends no mail at all, so the address is
+    not a delivery channel but the handle on the account, the way the owner
+    grants an eSIM by hand, and the only path back after a lost Telegram
+    account. `tg<id>@telegram.local` would take one tap off the first sign-up
+    and cost every one of those.
+    """
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from app.core.config import settings
+    from app.db.models import SocialAccount
+    from app.integrations.telegram_auth import TelegramAuthError, verify_login
+
+    try:
+        identity = verify_login(data, bot_token=settings.telegram_login_token)
+    except TelegramAuthError as exc:
+        # Local arithmetic, so there is no "provider unavailable" branch here:
+        # a failure is always the payload, never Telegram being down.
+        logger.info("auth.telegram_rejected", error=str(exc))
+        raise AuthenticationError("Could not verify this Telegram account") from None
+
+    for attempt in (1, 2):
+        link = (
+            await session.execute(
+                select(SocialAccount).where(
+                    SocialAccount.provider == "telegram",
+                    SocialAccount.provider_uid == identity.uid,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if link is not None:
+            customer = await session.get(Customer, link.customer_id)
+            if customer is None:  # pragma: no cover - FK makes this unreachable
+                raise AuthenticationError("Account not found")
+            if not customer.is_active:
+                raise AuthenticationError("Account disabled")
+            link.last_login_at = datetime.now(UTC)
+            await session.commit()
+            logger.info("auth.telegram_login", customer_id=customer.id, linked=True)
+            return customer
+
+        if not email:
+            # Known identity, no account yet. The front end asks and posts again.
+            raise TelegramEmailRequiredError("An e-mail address is needed for this account")
+
+        address = email.strip().lower()
+        customer = await customer_repo.get_by_email(session, address)
+        created = customer is None
+        if customer is None:
+            customer = Customer(
+                email=address,
+                full_name=identity.full_name,
+                hashed_password="",
+                referral_code=await _unique_referral_code(session),
+            )
+            session.add(customer)
+            await session.flush()
+        elif not customer.is_active:
+            raise AuthenticationError("Account disabled")
+
+        session.add(
+            SocialAccount(
+                customer_id=customer.id,
+                provider="telegram",
+                provider_uid=identity.uid,
+                email=address,
+                last_login_at=datetime.now(UTC),
+            )
+        )
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            if attempt == 1:
+                continue
+            # As with Google: this customer already holds a Telegram link with a
+            # different id. Retrying cannot clear it.
+            logger.warning("auth.telegram_link_conflict", error=str(exc.orig))
+            raise ConflictError(
+                "This e-mail is already linked to a different Telegram account"
+            ) from None
+
+        await session.refresh(customer)
+        logger.info("auth.telegram_login", customer_id=customer.id, created=created)
+        return customer
+
+    raise AuthenticationError("Could not sign in with Telegram")  # pragma: no cover
