@@ -73,7 +73,7 @@ async def list_payments(
             )
             for p, o in rows
         ],
-        total_uzs=float(totals[0]),
+        total_uzs=float(totals[0] or 0),
         count=int(totals[1]),
     )
 
@@ -173,7 +173,7 @@ async def purchases(
                 order_code=code_of(o),
                 provider=p.provider,
                 package_code=p.package_code,
-                cost_usd=float(cost),
+                cost_usd=float(cost or 0),
                 state=p.state,
                 note=p.note,
             )
@@ -268,7 +268,7 @@ async def report(
         profit_uzs=float(profit),
         new_customers=int(new_customers),
         top=[
-            {"name": name, "orders": int(count), "revenue_uzs": float(amount)}
+            {"name": name, "orders": int(count), "revenue_uzs": float(amount or 0)}
             for name, count, amount in top
         ],
     )

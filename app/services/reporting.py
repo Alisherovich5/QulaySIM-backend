@@ -194,7 +194,13 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
             func.count(func.distinct(Order.customer_id)),
         ).where(Order.id.in_(select(paid.c.id)))
     ).one()
-    report.orders, report.revenue_usd, report.revenue_uzs, report.buying_customers = totals
+    # `coalesce` already makes these non-NULL in SQL; the tuple is typed from
+    # the columns rather than from the aggregate, so it is said again here.
+    orders, revenue_usd, revenue_uzs, buyers = totals
+    report.orders = orders
+    report.revenue_usd = revenue_usd or ZERO
+    report.revenue_uzs = revenue_uzs or ZERO
+    report.buying_customers = buyers
 
     # Cost comes from the line snapshot. Rows sold before `unit_cost` existed
     # carry NULL; they are counted as zero cost rather than dropped, which
@@ -250,7 +256,11 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
         .order_by(func.count(ESIM.id).desc())
     ).all()
     report.suppliers = [
-        SupplierLine(provider=row[0], esims=row[1], cost_usd=row[2]) for row in supplier_rows
+        # A supplier whose rows all predate `unit_cost` sums to NULL, not to
+        # zero — and a report that crashes on one is worse than one that says
+        # the cost is not recorded.
+        SupplierLine(provider=row[0], esims=row[1], cost_usd=row[2] or ZERO)
+        for row in supplier_rows
     ]
 
     report.top_countries = [
@@ -399,7 +409,9 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
     # quietly not selling — which only shows up here. Locked prices are the usual
     # cause: nothing reprices them when a supplier moves.
     report.underwater_plans = [
-        (row[0], row[1], row[2])
+        # A plan with no recorded cost cannot be under water; `sells_at_a_loss`
+        # says the same thing, and zero is what the unsynced rows hold anyway.
+        (row[0], row[1], row[2] or Decimal("0"))
         for row in session.execute(
             select(Plan.title, Plan.price_usd, Plan.cost_usd)
             .where(
@@ -456,7 +468,10 @@ def build_report(session: Session, *, days: int, now: datetime | None = None) ->
             plan=row[1] or "—",
             left_mb=max(0, int(row[2]) - int(row[3])),
             total_mb=int(row[2]),
-            days_left=max(0, (row[4] - until).days),
+            # An eSIM with no expiry is not expiring; it is one the supplier
+            # never dated, and counting it as overdue would put it at the top
+            # of a list of things to chase.
+            days_left=max(0, (row[4] - until).days) if row[4] is not None else 0,
         )
         for row in session.execute(
             select(

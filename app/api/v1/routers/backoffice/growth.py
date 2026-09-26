@@ -267,7 +267,7 @@ async def list_referrals(
             AgentRow(
                 customer_id=cid,
                 email=email,
-                name=name or email.split("@")[0],
+                name=name or (email.split("@")[0] if email else "Mijoz"),
                 invited=int(count),
                 completed=int(done),
             )

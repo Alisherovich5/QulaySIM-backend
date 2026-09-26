@@ -75,7 +75,9 @@ async def _counts(session: SessionDep) -> dict[int, int]:
             .group_by(Plan.country_id)
         )
     ).all()
-    return {int(row[0]): int(row[1]) for row in rows}
+    # COUNT never returns NULL, but the column it groups by can be, and the
+    # row tuple is typed from the column rather than the aggregate.
+    return {int(row[0] or 0): int(row[1] or 0) for row in rows}
 
 
 @router.get("/countries")

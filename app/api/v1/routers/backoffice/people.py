@@ -327,7 +327,7 @@ async def search(q: str, session: SessionDep, staff: CurrentStaff) -> SearchOut:
             {
                 "id": o.id,
                 "code": code_of(o),
-                "customer_name": c.full_name or c.email.split("@")[0],
+                "customer_name": display_name(c),
                 "amount_uzs": float(o.amount_uzs) if o.amount_uzs is not None else None,
             }
             for o, c in orders
@@ -336,7 +336,7 @@ async def search(q: str, session: SessionDep, staff: CurrentStaff) -> SearchOut:
             {
                 "id": e.id,
                 "iccid": e.iccid,
-                "customer_name": c.full_name or c.email.split("@")[0],
+                "customer_name": display_name(c),
                 "plan_title": title,
             }
             for e, c, title in esims

@@ -16,6 +16,7 @@ from app.api.v1.routers.backoffice.esims import _live
 from app.api.v1.routers.backoffice.money import Wallet, _wallets
 from app.api.v1.routers.backoffice.orders import EsimOut, OrderRow, _rows, _shape, days_left
 from app.db.models import ESIM, CatalogSyncRun, Customer, Order, Plan
+from app.domain.people import display_name
 
 router = APIRouter(prefix="/api/v1/backoffice", tags=["backoffice"])
 
@@ -121,7 +122,7 @@ async def dashboard(session: SessionDep, staff: CurrentStaff) -> DashboardOut:
         wallets=await _wallets(session),
         today=Today(
             orders=int(orders_today),
-            revenue_uzs=float(revenue_today),
+            revenue_uzs=float(revenue_today or 0),
             pending=max(0, int(paid_today) - int(esims_today)),
             delivered=int(esims_today),
             failed=len([row for row in attention if row.stage == "failed"]),
@@ -134,7 +135,7 @@ async def dashboard(session: SessionDep, staff: CurrentStaff) -> DashboardOut:
             EsimOut(
                 id=esim.id,
                 iccid=esim.iccid,
-                customer_name=customer.full_name or customer.email.split("@")[0],
+                customer_name=display_name(customer),
                 customer_email=customer.email,
                 plan_title=title,
                 status=_live(esim.status, esim.expires_at),

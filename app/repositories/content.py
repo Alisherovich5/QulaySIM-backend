@@ -61,8 +61,11 @@ async def current_promo_banner(
     row = result.first()
     if row is None:
         return None, None
-    banner, code = row
-    # An expired or disabled code must not be advertised.
+    banner, found = row
+    # An expired or disabled code must not be advertised. Named apart from the
+    # row's own value because the query types that as a PromoCode, while the
+    # answer to "is there a code to show" is allowed to be no.
+    code: PromoCode | None = found
     if code is not None and not code.is_active:
         code = None
     return banner, code

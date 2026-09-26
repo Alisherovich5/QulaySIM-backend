@@ -14,6 +14,7 @@ from app.api.v1.routers.backoffice.orders import EsimOut, code_of, days_left
 from app.core.errors import NotFoundError
 from app.core.logging import get_logger
 from app.db.models import ESIM, Customer, Order, Plan
+from app.domain.people import display_name
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1/backoffice", tags=["backoffice"])
@@ -100,7 +101,7 @@ async def list_esims(
         EsimOut(
             id=esim.id,
             iccid=esim.iccid,
-            customer_name=customer.full_name or customer.email.split("@")[0],
+            customer_name=display_name(customer),
             customer_email=customer.email,
             plan_title=title,
             status=_live(esim.status, esim.expires_at),
@@ -153,7 +154,7 @@ async def esim_detail(esim_id: int, session: SessionDep, staff: CurrentStaff) ->
     return EsimDetail(
         id=esim.id,
         iccid=esim.iccid,
-        customer_name=customer.full_name or customer.email.split("@")[0],
+        customer_name=display_name(customer),
         customer_email=customer.email,
         plan_title=title,
         status=_live(esim.status, esim.expires_at),
