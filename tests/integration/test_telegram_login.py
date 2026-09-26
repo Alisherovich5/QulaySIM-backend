@@ -85,9 +85,7 @@ class TestTheFirstTime:
         with pytest.raises(TelegramEmailRequiredError):
             await service.login_with_telegram(session, data=PAYLOAD)
 
-    async def test_the_asking_is_not_an_authentication_failure(
-        self, session, as_telegram
-    ) -> None:
+    async def test_the_asking_is_not_an_authentication_failure(self, session, as_telegram) -> None:
         """The signature was good and we know who this is. A 401 here would
         tell somebody to fix a Telegram account that is working perfectly."""
         as_telegram(_identity())
@@ -96,9 +94,7 @@ class TestTheFirstTime:
         assert caught.value.status_code == 422
         assert caught.value.code == "telegram_email_required"
 
-    async def test_an_address_creates_a_passwordless_account(
-        self, session, as_telegram
-    ) -> None:
+    async def test_an_address_creates_a_passwordless_account(self, session, as_telegram) -> None:
         identity = _identity()
         as_telegram(identity)
         email = _email()
@@ -113,7 +109,9 @@ class TestTheFirstTime:
         assert verify_password("anything", customer.hashed_password) is False
 
         links = await _links(session, customer.id)
-        assert [(l.provider, l.provider_uid) for l in links] == [("telegram", identity.uid)]
+        assert [(link.provider, link.provider_uid) for link in links] == [
+            ("telegram", identity.uid)
+        ]
 
 
 class TestComingBack:
@@ -175,9 +173,7 @@ class TestJoiningAnExistingAccount:
 
     async def test_a_disabled_account_is_refused(self, session, as_telegram) -> None:
         email = _email()
-        session.add(
-            Customer(email=email, full_name="Gone", hashed_password="", is_active=False)
-        )
+        session.add(Customer(email=email, full_name="Gone", hashed_password="", is_active=False))
         await session.commit()
 
         as_telegram(_identity())
