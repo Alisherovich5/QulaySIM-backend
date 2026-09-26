@@ -121,7 +121,14 @@ class TestTheLanguageDecidesCacheability:
         self, client: AsyncClient
     ) -> None:
         response = await client.get("/api/regions?lang=uz")
-        assert response.headers["vary"] == "Accept-Encoding"
+        # What this asserts is that the answer does not vary by language — not
+        # that the header is one exact string. `Vary` is a list several layers
+        # contribute to, and asserting equality made this test fail the day
+        # Starlette started adding `Origin` to it from the CORS middleware,
+        # which has nothing to do with caching by language and is correct of it.
+        vary = response.headers["vary"]
+        assert "Accept-Language" not in vary
+        assert "Accept-Encoding" in vary
         assert "s-maxage" in response.headers["cache-control"]
 
     async def test_an_ambiguous_address_is_never_stored(self, client: AsyncClient) -> None:
