@@ -23,6 +23,7 @@ from app.db.models import (
     Staff,
     TOTPDevice,
 )
+from app.domain.people import display_name
 
 router = APIRouter(prefix="/api/v1/backoffice", tags=["backoffice"])
 
@@ -179,7 +180,7 @@ async def customer_detail(
     paid = [o for o, _ in orders if o.status == "paid"]
     return CustomerDetail(
         id=customer.id,
-        name=customer.full_name or customer.email.split("@")[0],
+        name=display_name(customer),
         email=customer.email,
         created_at=customer.created_at,
         sign_in=social or ("parol" if customer.hashed_password else "—"),
@@ -321,10 +322,7 @@ async def search(q: str, session: SessionDep, staff: CurrentStaff) -> SearchOut:
     ).all()
 
     return SearchOut(
-        customers=[
-            {"id": c.id, "name": c.full_name or c.email.split("@")[0], "email": c.email}
-            for c in customers
-        ],
+        customers=[{"id": c.id, "name": display_name(c), "email": c.email} for c in customers],
         orders=[
             {
                 "id": o.id,

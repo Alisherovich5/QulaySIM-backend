@@ -12,7 +12,9 @@ class Customer(Base):
     __tablename__ = "customers_customer"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(254), unique=True)
+    # Null until there is one. Telegram proves who somebody is and says nothing
+    # about how to reach them; see the Django model, which owns this column.
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, nullable=True)
     full_name: Mapped[str] = mapped_column(String(150), default="")
     # Empty for provider-only accounts; verify_password refuses an empty hash.
     hashed_password: Mapped[str] = mapped_column(String(255), default="")

@@ -25,6 +25,7 @@ from app.db.models import (
     Plan,
     SupplierPurchase,
 )
+from app.domain.people import display_name
 from app.integrations import telegram
 
 router = APIRouter(prefix="/api/v1/backoffice", tags=["backoffice"])
@@ -221,7 +222,7 @@ def _shape(order: Order, extra: dict[str, object]) -> OrderRow:
     return OrderRow(
         id=order.id,
         code=code_of(order),
-        customer_name=order.customer.full_name or order.customer.email.split("@")[0],
+        customer_name=display_name(order.customer),
         customer_email=order.customer.email,
         plan_title=str(extra["title"]),
         amount_uzs=float(order.amount_uzs) if order.amount_uzs is not None else None,
@@ -520,7 +521,7 @@ async def send_qr(order_id: int, session: SessionDep, staff: CurrentStaff) -> di
         raise ConflictError("QR rasmi saqlanmagan")
 
     caption = (
-        f"<b>{code_of(order)}</b> · {telegram._escape(order.customer.email)}\n"
+        f"<b>{code_of(order)}</b> · {telegram._escape(display_name(order.customer))}\n"
         f"ICCID <code>{telegram._escape(esim.iccid)}</code>\n"
         f"{telegram._escape(staff.display_name)} yubordi"
     )

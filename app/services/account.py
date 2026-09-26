@@ -14,6 +14,7 @@ from app.core.security import hash_password, verify_password
 from app.db.models import ESIM, Customer, Testimonial
 from app.db.models.enums import ESIMStatus
 from app.domain import avatars
+from app.domain.people import display_name
 from app.domain.referral import (
     CommissionTier,
     new_referral_code,
@@ -64,7 +65,13 @@ def referral_visible_to(customer: Customer) -> bool:
         for item in (settings.referral_visible_to or "").split(",")
         if item.strip()
     }
-    return not allowed or customer.email.strip().lower() in allowed
+    # An account with no address cannot be on an allow-list of addresses. Said
+    # out loud rather than left to `None.strip()`, which is how a Telegram
+    # customer would have found the feature by crashing on it.
+    if not allowed:
+        return True
+    email = customer.email
+    return email is not None and email.strip().lower() in allowed
 
 
 async def set_avatar(session: AsyncSession, customer: Customer, raw: bytes) -> None:
@@ -265,7 +272,7 @@ async def submit_testimonial(
         review = Testimonial(customer_id=customer.id)
         session.add(review)
 
-    review.name = (customer.full_name.strip() or customer.email.split("@", 1)[0])[:80]
+    review.name = display_name(customer)[:80]
     review.location = location.strip()
     review.text = text.strip()
     review.rating = rating

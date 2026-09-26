@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from datetime import UTC
 
-from fastapi import status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -286,43 +285,26 @@ async def logout(refresh_token: str | None) -> None:
     await revoke(str(payload["jti"]), settings.refresh_token_ttl_days * 86400)
 
 
-class TelegramEmailRequiredError(DomainError):
-    """A Telegram account we have never seen, and no address to file it under.
-
-    Not an authentication failure: the signature was good and we know who this
-    is. It is the one thing Telegram cannot tell us. The front end answers it
-    by asking once and posting the same payload back with an address; the
-    payload is still inside its freshness window, so nothing has to be re-signed.
-
-    422 rather than 401, and with its own `code`, because the two mean opposite
-    things to the page: 401 says stop and offer another way in, this says carry
-    on and ask one question. A front end that could not tell them apart would
-    show "could not verify your Telegram account" to somebody whose Telegram
-    account verified perfectly.
-    """
-
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-    code = "telegram_email_required"
-
-
 async def login_with_telegram(
     session: AsyncSession, *, data: dict[str, str], email: str | None = None
 ) -> Customer:
     """Sign in (or sign up) with a verified Telegram identity.
 
-    The same three cases as Google, with one difference that shapes everything:
-    **Telegram sends no e-mail.** Google's second case — unknown provider id,
-    known address — is what lets a password account and a social account become
-    one account instead of two. Without an address there is nothing to match on,
-    so a first-time Telegram user is asked for one rather than filed under a
-    synthetic address nobody can ever recover.
+    The same shape as Google, minus the case Telegram cannot support:
+    **it sends no e-mail.** Google's second case — unknown provider id, known
+    address — is what lets a password account and a social account become one
+    account instead of two, and with nothing to match on it cannot exist here.
 
-    That choice is worth defending. `customers_customer.email` is the key a
-    person gets back in with: this shop sends no mail at all, so the address is
-    not a delivery channel but the handle on the account, the way the owner
-    grants an eSIM by hand, and the only path back after a lost Telegram
-    account. `tg<id>@telegram.local` would take one tap off the first sign-up
-    and cost every one of those.
+    So the account is opened without one. The column admits that (see the Django
+    model): an address is what a person signs in with and how the owner grants
+    an eSIM by hand, and it can be added later from the account page. Demanding
+    it during a one-tap sign-in buys nothing the customer cannot give us
+    afterwards, and a synthetic `tg<id>@telegram.local` would buy the same
+    nothing while making the account unrecoverable.
+
+    `email` is still accepted, because the page may have collected one — and an
+    address that already belongs to somebody links the two accounts rather than
+    opening a second.
     """
     from datetime import datetime
 
@@ -361,12 +343,8 @@ async def login_with_telegram(
             logger.info("auth.telegram_login", customer_id=customer.id, linked=True)
             return customer
 
-        if not email:
-            # Known identity, no account yet. The front end asks and posts again.
-            raise TelegramEmailRequiredError("An e-mail address is needed for this account")
-
-        address = email.strip().lower()
-        customer = await customer_repo.get_by_email(session, address)
+        address = email.strip().lower() if email else None
+        customer = await customer_repo.get_by_email(session, address) if address else None
         created = customer is None
         if customer is None:
             customer = Customer(

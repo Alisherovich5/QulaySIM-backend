@@ -28,7 +28,6 @@ from app.db.session import SessionFactory
 from app.integrations import telegram_auth
 from app.integrations.telegram_auth import TelegramAuthError, TelegramIdentity
 from app.services import auth as service
-from app.services.auth import TelegramEmailRequiredError
 
 PAYLOAD = {"id": "42", "hash": "a" * 64, "auth_date": "1790000000"}
 
@@ -78,21 +77,32 @@ async def _links(session, customer_id: int) -> list[SocialAccount]:
 
 
 class TestTheFirstTime:
-    async def test_an_unknown_telegram_account_asks_for_an_address(
-        self, session, as_telegram
-    ) -> None:
-        as_telegram(_identity())
-        with pytest.raises(TelegramEmailRequiredError):
-            await service.login_with_telegram(session, data=PAYLOAD)
+    async def test_one_tap_opens_an_account_with_no_address(self, session, as_telegram) -> None:
+        """Nothing is asked. Telegram cannot supply an address and the column
+        admits that, so demanding one would be friction buying nothing the
+        customer cannot give us from the account page afterwards."""
+        identity = _identity()
+        as_telegram(identity)
 
-    async def test_the_asking_is_not_an_authentication_failure(self, session, as_telegram) -> None:
-        """The signature was good and we know who this is. A 401 here would
-        tell somebody to fix a Telegram account that is working perfectly."""
+        customer = await service.login_with_telegram(session, data=PAYLOAD)
+
+        assert customer.email is None
+        assert customer.full_name == "Otabek Qayumov"
+        links = await _links(session, customer.id)
+        assert [(link.provider, link.provider_uid) for link in links] == [
+            ("telegram", identity.uid)
+        ]
+
+    async def test_two_address_less_accounts_can_coexist(self, session, as_telegram) -> None:
+        """The column is unique, and Postgres counts no two NULLs as equal. If
+        it did, the second Telegram customer would be an IntegrityError."""
         as_telegram(_identity())
-        with pytest.raises(TelegramEmailRequiredError) as caught:
-            await service.login_with_telegram(session, data=PAYLOAD)
-        assert caught.value.status_code == 422
-        assert caught.value.code == "telegram_email_required"
+        first = await service.login_with_telegram(session, data=PAYLOAD)
+        as_telegram(_identity())
+        second = await service.login_with_telegram(session, data=PAYLOAD)
+
+        assert first.id != second.id
+        assert first.email is None and second.email is None
 
     async def test_an_address_creates_a_passwordless_account(self, session, as_telegram) -> None:
         identity = _identity()
